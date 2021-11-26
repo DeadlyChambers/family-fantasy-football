@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>{% block title %} Welcome to Chambers Fantasy Football {% endblock %}</h1>
+    {% for season in seasons %}
+        <a  href="{{ url_for('get_season', year=season['year'])}}">
+            <h2>{{ season['year'] }}</h2>
+        </a>
+        <span class="badge badge-primary">{{ season['created'] }}</span>
+        <a class="navbar-brand" href="{{ url_for('get_seasons')}}">Fantasy Football</a>
+          <a  href="{{ url_for('get_teams', year=season['year'])}}">
+            <h2>{{ season['year'] }} Teams</h2>
+        </a>
+        <hr>
+    {% endfor %}
+{% endblock %}

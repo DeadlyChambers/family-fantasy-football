@@ -1,0 +1,11 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "name": "fantasy_db",
+            "database": "${workspaceFolder:family-fantasy-football}/data/database.db"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}

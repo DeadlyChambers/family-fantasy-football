@@ -76,7 +76,7 @@ class ConfigParserMultiOpt(configparser.RawConfigParser):
                     sectname = mo.group("header")
                     if sectname in self._sections:
                         if self._strict and sectname in elements_added:
-                            raise DuplicateSectionError(sectname, fpname, lineno)
+                            raise configparser.DuplicateSectionError(sectname, fpname, lineno)
                         cursect = self._sections[sectname]
                         elements_added.add(sectname)
                     elif sectname == self.default_section:
@@ -92,7 +92,7 @@ class ConfigParserMultiOpt(configparser.RawConfigParser):
                     optname = None
                 # no section header in the file?
                 elif cursect is None:
-                    raise MissingSectionHeaderError(fpname, lineno, line)
+                    raise configparser.MissingSectionHeaderError(fpname, lineno, line)
                 # an option line?
                 else:
                     mo = self._optcre.match(value)

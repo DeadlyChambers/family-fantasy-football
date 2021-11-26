@@ -7,3 +7,4 @@ numpy
 plotille
 webcolors
 colorama>=0.4.4
+flask

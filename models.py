@@ -1,7 +1,4 @@
-import utils
-import warnings
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from yachalk import chalk
 
 @dataclass
@@ -31,6 +28,7 @@ class Team:
         self.players = []
         self.name = name
         self.score = 0
+        self.high_score = 0
         return
     
     def add_player(self, player: Player):
@@ -41,6 +39,14 @@ class Team:
         """
         self.players.append(player)
         self.score += float(player.score)
+        
+    def set_high_score(self, score: float):
+        """Set the high score for object state
+
+        Args:
+            score (float): The current high score
+        """
+        self.high_score = score
 
     def tostring(self, score:float = 0, verbose:bool = False):
         """Simple method to output the team in different ways for output
