@@ -1,0 +1,9 @@
+configparser
+pytz
+pytest
+colorama
+dataclasses
+numpy
+plotille
+webcolors
+colorama>=0.4.4
