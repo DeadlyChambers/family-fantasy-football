@@ -54,7 +54,8 @@
             </div>
         </div> 
     </div>
-{% endif %}    
+{% endif %}
+<!--TODO Add the Create player under the Add Player to team input. This could speed up the process of creating teams/players-->
 
 {% endblock %}
 
@@ -121,8 +122,6 @@
                     else{
                         console.log("Updating "+id + " to new score failed to update");
                     }
-
-
             })
             .catch(function (err) {
                 console.error("Error deleting "+err)
