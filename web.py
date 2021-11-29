@@ -221,7 +221,7 @@ def create_player():
         score = int(score)
     conn.execute('INSERT into players (name, position) VALUES (?,?)', (name, position,))
     player_id = int(conn.lastrowid)
-    conn.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (player_id, team_id,score))
+    conn.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (player_id, team_id,score,))
     update_team_score(teamid=team_id)
     conn.close()
     return get_team(team[1])
@@ -240,19 +240,19 @@ def update_team_player_score(teamplayerid):
     new_score = request.form.get('new_score')
     if new_score is None or new_score.isnumeric() == False:
         return jsonify(message="Score was not present in request", success="false")
-    teamplayer = conn.execute('SELECT tp.score, tp.team_id, t.season_id FROM teams_players tp join teams t on tp.team_id = t.id WHERE tp.id = ? ',(int(teamplayerid),)).fetchone()
+    teamplayer = conn.execute('SELECT tp.score, tp.player_id, t.season_id FROM teams_players tp join teams t on tp.team_id = t.id WHERE tp.id = ? ',(int(teamplayerid),)).fetchone()
     old_score = int(teamplayer[0])
     new_score = int(new_score)
     if old_score == new_score:
         return jsonify(message="Score provided matched score in db", success="false")
     delta_score = new_score - old_score
-    #TODO update TP.score, and subtract delta score commit
-    
-    
+    season_id = int(teamplayer[2])
+    player_id = int(teamplayer[1])
+    conn.execute('UPDATE teams_players SET score = ? WHERE team_id in (SELECT id FROM teams WHERE season_id = ?) AND player_id = ?', (new_score, season_id, player_id,))
+    conn.execute('UPDATE teams SET score = score + ? WHERE season_id = ? and id in (SELECT team_id FROM teams_players WHERE player_id = ?)', (delta_score, season_id, player_id,))
     conn.commit()
     conn.close()
-    update_team_score(teamid=int(teamid))
-    
+    return jsonify(message="Score has been updated",success="true")
 
 
 @app.route('/teams/<int:teamid>/players/<int:playerid>', methods=['DELETE'])

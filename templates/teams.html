@@ -19,7 +19,13 @@
                     <span class="player-row">
                         <span class="player-name">{{player['name']}}</span>
                         <span class="player-position">{{player['position']}}</span>
-                        <span class="player-score">{{player['score']}}</span>
+                        <span class="player-score">
+                            <input id="tp-{{player['team_player_id']}}" type="number" value="{{player['score']}}">
+                            <img class="icon icon-update-row" src="/static/images/person_remove_black_24dp.svg"
+                                alt="update" onclick="updaterow({{player['team_player_id']}})"/>
+                                <!--https://fonts.google.com/icons?selected=Material+Icons&icon.query=check -->
+                                <!--Need class and icon,-->
+                        </span>
                         <span class="player-delete">
                             <img class="icon icon-delete-row" src="/static/images/person_remove_black_24dp.svg"
                                 alt="delete"  onclick="deleterow({{team['id']}}, {{player['id']}})"/>
@@ -91,6 +97,31 @@
                     $(id).remove();
                     //todo update score
                     console.log("Deleting "+id + " new score "+results.score);
+
+            })
+            .catch(function (err) {
+                console.error("Error deleting "+err)
+            });
+        }
+        function updaterow(teamplayerid){
+            let url = "/teamplayers/"+teamplayerid.toString();
+            let id = "#tp-"+ teamplayerid.toString();
+            let newScore = $(id).val()
+            $.ajax({
+                url: url,
+                method:'PUT',
+                data: {
+                    "new_score": newScore
+                }
+            }).then(function (results) {
+                //TODO validate
+                    if(results.success === "true"){
+                        console.log("Updating "+id + " new score "+results.score);
+                    }
+                    else{
+                        console.log("Updating "+id + " to new score failed to update");
+                    }
+
 
             })
             .catch(function (err) {
