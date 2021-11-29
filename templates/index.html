@@ -1,16 +1,70 @@
 {% extends 'base.html' %}
-
+. kjh  b njkop[plkmkp-p.;.lo]
 {% block content %}
     <h1>{% block title %} Welcome to Chambers Fantasy Football {% endblock %}</h1>
-    {% for season in seasons %}
-        <a  href="{{ url_for('get_season', year=season['year'])}}">
-            <h2>{{ season['year'] }}</h2>
+    {% include 'goback.html' %}
+    <!--TODO Figure out the hiding of the title pagesbn-->
+    {% if year is not defined %}
+        {% for season in seasons %}
+            <a  href="{{ url_for('get_teams', year=season['year'])}}">
+                <h2>{{ season['year'] }} Teams</h2>
+                <span class="badge badge-primary">{{ season['created'] }}</span>
+            </a>
+            <hr>
+        {% endfor %}
+    {% else %}
+        <h2>Season {{year}}</h2>
+        <a  href="{{ url_for('get_season', year=year)}}">
+            <h2>{{ year }}</h2>
         </a>
-        <span class="badge badge-primary">{{ season['created'] }}</span>
-        <a class="navbar-brand" href="{{ url_for('get_seasons')}}">Fantasy Football</a>
-          <a  href="{{ url_for('get_teams', year=season['year'])}}">
-            <h2>{{ season['year'] }} Teams</h2>
-        </a>
-        <hr>
-    {% endfor %}
+    {% endif %}
+    <div class="container">
+        
+    {% if show_teams == True %}
+        {% for team in teams %}
+        <div class="row">
+                <!--Display Teams for navigation-->
+                <div class="col-sm">
+                    <a  href="{{ url_for('get_team', name=team['name'], year=year)}}">
+                        <h2>{{ team['name'] }} - {{ team['score']}}</h2>
+                    </a>
+                </div>
+                {% endfor %}
+        </div>
+    {% else %}
+        <!--Create Season -->
+        <div class="row">
+            <div class="col-sm-12">
+                <form class="form-inline" method="post" action="{{ url_for('create_season') }}">
+                    <div class="form-group mx-sm-3 mb-2">
+                        <label for="year_input" class="sr-only">Year</label>
+                        <input type="number" class="form-control" name="year" id="year_input" placeholder="Year">
+                    </div>
+                    <button type="submit" class="btn btn-primary mb-2">Create Season</button>
+                </form>
+            </div>
+        </div>
+    {% endif %}
+        <!--Create Team -->
+        <div class="row">
+            <div class="col-sm-12">
+                <form class="form-inline" method="post" action="{{ url_for('create_team') }}">
+                    <div class="form-group mb-2">
+                        <label for="year_select" class="sr-only">Year</label>
+                            <select class="form-control" id="year_select" name="year" value="{{ year }}">
+                        {% for season in seasons %}
+                            <option>{{season['year']}}</option>
+                        {% endfor %}
+                        </select> 
+                    </div>
+                    <div class="form-group mx-sm-3 mb-2">
+                        <label for="name" class="sr-only">Name</label>
+                        <input type="text" class="form-control" id="name" name="name" placeholder="Name">
+                    </div>
+                    <button type="submit" class="btn btn-primary mb-2">Create Team</button>
+                </form>
+            </div>
+        </div>
+        </div>
+    </div>
 {% endblock %}

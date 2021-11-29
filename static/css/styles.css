@@ -1,0 +1,46 @@
+.icon {
+    cursor:pointer;
+}
+.icon-gray, .icon-page{
+    filter: invert(49%) sepia(14%) saturate(297%) hue-rotate(167deg) brightness(88%) contrast(84%);
+}
+
+.icon-blue, .icon:hover{
+    filter: invert(43%) sepia(57%) saturate(2747%) hue-rotate(164deg) brightness(99%) contrast(103%);
+}
+
+.icon-green {
+    filter: invert(51%) sepia(72%) saturate(492%) hue-rotate(81deg) brightness(89%) contrast(89%);
+}
+
+.icon-red, .icon-delete-row{
+    filter: invert(37%) sepia(34%) saturate(2179%) hue-rotate(318deg) brightness(87%) contrast(111%);
+}
+.icon-delete-row:hover{
+    filter: invert(49%) sepia(14%) saturate(297%) hue-rotate(167deg) brightness(88%) contrast(84%);
+}
+
+.icon-yellow{
+    filter: invert(86%) sepia(26%) saturate(5839%) hue-rotate(352deg) brightness(105%) contrast(104%);
+}
+
+.icon-delete-row{
+    width:20px;
+    height:20px;
+}
+
+.icon-page{
+    width:30px;
+    height:30px;
+}
+
+/*Player page*/
+span.player-name {
+    min-width: 100px;
+    display: inline-block;
+}
+
+span.player-position, span.player-score, span.player-delete {
+    display: inline-block;
+    min-width: 30px;
+}

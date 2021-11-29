@@ -16,11 +16,8 @@ CREATE TABLE players (
     created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     name TEXT NOT NULL,
     position TEXT NOT NULL,
-    score real NOT NULL DEFAULT 0,
-    season_id INTEGER NOT NULL,
-    UNIQUE (season_id, position, name),
-    FOREIGN KEY (season_id)
-        REFERENCES seasons (id)
+    active BOOLEAN NOT NULL DEFAULT 1,
+    UNIQUE (position, name)
 );
 
 DROP TABLE IF EXISTS teams;
@@ -43,6 +40,7 @@ CREATE TABLE teams_players (
     created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     player_id INTEGER NOT NULL,
     team_id INTEGER NOT NULL,
+    score real NOT NULL DEFAULT 0,
     UNIQUE (player_id, team_id),
     FOREIGN KEY (player_id)
         REFERENCES players (id),

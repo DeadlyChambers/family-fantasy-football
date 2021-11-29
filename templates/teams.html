@@ -2,18 +2,100 @@
 
 {% block content %}
     <h1>{% block title %} Teams for {{year}} Chambers Fantasy Football {% endblock %}</h1>
+    {% include 'goback.html' %}
     {% for team in teams %}
         <a  href="{{ url_for('get_team', name=team['name'], year=year)}}">
-            <h2>{{ team['name'] }}</h2>
-            <h4>{{ team['score']}}</h4>
+            <h2>{{ team['name'] }} - <span id="team-{{team['id']}}">{{ team['score']}}</span></h2>            
         </a>
         <span class="badge badge-primary">{{ team['created'] }}</span>
         <a class="navbar-brand" href="{{ url_for('get_seasons')}}">Seasons</a>|
         <a class="navbar-brand" href="{{ url_for('get_teams', year=year)}}">Teams</a>|
         <a class="navbar-brand" href="{{ url_for('get_season', year=year)}}">{{year}}</a>
         <hr>
+        <div class="container">
         {% for player in players %}
-        <span> <a href="{{ url_for('get_player', id=player['id'])}}"> {{player['name']}} </a> | {{player['score']}} | {{player['position']}}</span>
+            <div class="row" id="player-{{player['id']}}">
+                <div class="col-sm-12">
+                    <span class="player-row">
+                        <span class="player-name">{{player['name']}}</span>
+                        <span class="player-position">{{player['position']}}</span>
+                        <span class="player-score">{{player['score']}}</span>
+                        <span class="player-delete">
+                            <img class="icon icon-delete-row" src="/static/images/person_remove_black_24dp.svg"
+                                alt="delete"  onclick="deleterow({{team['id']}}, {{player['id']}})"/>
+                        </span>
+                    </span>
+                </div>
+            </div>
         {% endfor %}
+        </div>
     {% endfor %}
+{% if year is not undefined and name is not undefined %}
+    <div class="container">
+        <div class="row">
+            <div class="col-sm-12">
+                <form class="form-inline" method="post" action="{{ url_for('player_add', name=name) }}">
+                    <div class="form-group mb-2">
+                        <label for="year_select" class="sr-only">Player</label>
+                        <select class="form-control auto-complete" name="player_id" 
+                        placeholder="Player Name or Position"
+                        data-noresults-text="Player may not exist, add the player from players screen."
+                        autocomplete="off" data-url="/players"></select>
+                        <input type="hidden" value="{{year}}" name="year"/>
+                    </div>
+                    <button type="submit" class="btn btn-primary mb-2">Add Player to your team</button>
+                </form>
+            </div>
+        </div> 
+    </div>
+{% endif %}    
+
 {% endblock %}
+
+{% block scripts%}
+<script src="https://cdn.jsdelivr.net/gh/xcash/bootstrap-autocomplete@v2.3.7/dist/latest/bootstrap-autocomplete.min.js" crossorigin="anonymous"></script>
+    <script type="text/javascript">
+        $(function() {
+            $('.auto-complete').autoComplete(
+                {
+                    resolverSettings:{ 
+                        fail: function(a,x){
+                            console.log(a)
+                            console.log(x)
+                        }
+                    },
+                    resolver: 'custom',
+					events: {
+						search: function (qry, callback) {
+							// let's do a custom ajax call
+							$.ajax(
+								'/players',
+								{
+									data: { 'qry': qry}
+								}
+							).done(function (res) {
+								callback(res)
+							});
+						}
+					}
+                    })
+        })
+        function deleterow(teamid, playerid){
+            let url = "/teams/"+teamid.toString()+"/players/"+playerid.toString();
+            $.ajax({
+                url: url,
+                method:'DELETE'
+            }).then(function (results) {
+
+                    let id = "#player-"+ playerid.toString();
+                    $(id).remove();
+                    //todo update score
+                    console.log("Deleting "+id + " new score "+results.score);
+
+            })
+            .catch(function (err) {
+                console.error("Error deleting "+err)
+            });
+        }
+    </script>
+{% endblock%}

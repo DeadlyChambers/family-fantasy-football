@@ -2,6 +2,7 @@
 
 {% block content %}
     <h1>{% block title %} Players for {{year}} Chambers Fantasy Football {% endblock %}</h1>
+    {% include 'goback.html' %}
     {% for player in players %}
         
             <h2>{{ player['name'] }}</h2>
@@ -12,6 +13,6 @@
         <a class="navbar-brand" href="{{ url_for('get_seasons')}}">Seasons</a>|
         <a class="navbar-brand" href="{{ url_for('get_teams')}}">Teams</a>
         <hr>
-      
+
     {% endfor %}
 {% endblock %}

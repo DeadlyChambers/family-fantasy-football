@@ -10,33 +10,33 @@ cur = connection.cursor()
 
 cur.execute("INSERT INTO seasons (year) VALUES (?)",([2020]))
 cur.execute("INSERT INTO seasons (year) VALUES (?)",([2021]))
-year = cur.lastrowid
+year = int(cur.lastrowid)
 
 
 cur.execute("INSERT INTO teams (name, season_id) VALUES (?, ?)",("Shane", year,))
-shane = cur.lastrowid
+shane = int(cur.lastrowid)
 cur.execute("INSERT INTO teams (name, season_id) VALUES (?, ?)",("Preston", year,))
-preston =cur.lastrowid
+preston =int(cur.lastrowid)
 cur.execute("INSERT INTO teams (name, season_id) VALUES (?, ?)",("Tommy", year,))
-tommy = cur.lastrowid
+tommy = int(cur.lastrowid)
 
-cur.execute("INSERT INTO players (name, position, score, season_id) VALUES (?,?,?,?)", ("Allen", "qb", 26.7, year,))
-allen = cur.lastrowid
-cur.execute("INSERT INTO players (name, position, score, season_id) VALUES (?,?,?,?)", ("Pollard", "rb", 16.8, year,))
-pollard = cur.lastrowid
-cur.execute("INSERT INTO players (name, position, score, season_id) VALUES (?,?,?,?)", ("Diggs", "wr", 20.4, year,))
-diggs = cur.lastrowid
+cur.execute("INSERT INTO players (name, position) VALUES (?,?)", ("Allen", "qb", ))
+allen = int(cur.lastrowid)
+cur.execute("INSERT INTO players (name, position) VALUES (?,?)", ("Pollard", "rb",))
+pollard = int(cur.lastrowid)
+cur.execute("INSERT INTO players (name, position) VALUES (?,?)", ("Diggs", "wr",))
+diggs = int(cur.lastrowid)
 
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (allen, shane,))
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (pollard, shane,))
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (diggs, shane,))
-
-
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (allen, preston,))
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (diggs, preston,))
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (allen, shane,26.7,))
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (pollard, shane,16.8,))
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (diggs, shane,20.4,))
 
 
-cur.execute("INSERT INTO teams_players (player_id, team_id) VALUES (?,?)", (diggs, tommy,))
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (allen, preston,26.7,))
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (diggs, preston,20.4,))
+
+
+cur.execute("INSERT INTO teams_players (player_id, team_id, score) VALUES (?,?,?)", (diggs, tommy,20.4,))
 
 connection.commit()
 connection.close()
