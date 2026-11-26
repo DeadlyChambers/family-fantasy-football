@@ -487,6 +487,20 @@ def test_the_commish_changes_a_locked_roster_and_the_change_is_called_out(app, c
     assert "50.50" in page(jill, "/teams")  # 73.50 without q1's 17 and k1's 6; q2 has no points yet
 
 
+def test_a_change_to_a_reopened_team_after_the_lock_is_called_out(app, clock):
+    jill, shane = join(app, "Jill"), join(app, "Shane")
+    post(jill, "/picks", **ROSTER)
+    clock["now"] = AFTER_KICKOFF
+
+    post(shane, "/commish/unlock/2")
+    post(jill, "/picks", **{**ROSTER, "QB": "q2"})
+
+    board = page(join(app, "Papaw"), "/teams")
+    assert "Edited by commish at <time" in board
+    assert "reopened the team for one more change." in board
+    assert "approved a change after reopening the team: added Other Thrower at QB, replacing Quinn Passer." in board
+
+
 def test_the_commish_deletes_a_team_only_when_the_name_matches_the_id(app, clock):
     jill, shane = join(app, "Jill"), join(app, "Shane")
     post(jill, "/picks", **ROSTER)

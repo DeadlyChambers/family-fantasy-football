@@ -313,6 +313,12 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             edits.setdefault(row["user_id"], []).append(row)
         return edits
 
+    def record_edits(user_id, notes):
+        g.db.executemany(
+            "INSERT INTO roster_edits (user_id, edited_at, note) VALUES (?, ?, ?)",
+            [(user_id, now().isoformat(), note) for note in notes],
+        )
+
     def can_edit():
         return bool(g.user["unlocked"]) or not revealed()
 
@@ -438,6 +444,9 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         if error:
             flash(error)
             return render_home(request.form, 400)
+        if started:
+            changes = edit_notes(load_slots(g.user["id"]) or {}, slots, players)
+            record_edits(g.user["id"], [f"approved a change after reopening the team: {note}" for note in changes])
         g.db.execute(
             "INSERT INTO picks (user_id, slots, submitted_at) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET slots = excluded.slots, submitted_at = excluded.submitted_at",
@@ -588,6 +597,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     def commish_unlock(user_id):
         member = member_or_404(user_id)
         g.db.execute("UPDATE users SET unlocked = 1 WHERE id = ?", (user_id,))
+        record_edits(user_id, ["reopened the team for one more change"])
         g.db.commit()
         flash(f"{member['name']} can change their team once, then it locks again.")
         return redirect(url_for("commish"))
@@ -620,17 +630,13 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
                 chosen, status = request.form, 400
             else:
                 notes = edit_notes(before, after, players)
-                stamp = now().isoformat()
                 if notes:
                     g.db.execute(
                         "INSERT INTO picks (user_id, slots, submitted_at) VALUES (?, ?, ?) "
                         "ON CONFLICT(user_id) DO UPDATE SET slots = excluded.slots",
-                        (user_id, json.dumps(after), stamp),
+                        (user_id, json.dumps(after), now().isoformat()),
                     )
-                    g.db.executemany(
-                        "INSERT INTO roster_edits (user_id, edited_at, note) VALUES (?, ?, ?)",
-                        [(user_id, stamp, note) for note in notes],
-                    )
+                    record_edits(user_id, notes)
                     g.db.commit()
                 flash(f"{member['name']}'s team is changed." if notes else "Nothing was changed.")
                 return redirect(url_for("commish_team", user_id=user_id))
