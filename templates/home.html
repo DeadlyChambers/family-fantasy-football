@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block head %}{% if started and not editable and flex_choices is none and not tiebreak_form %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
+{% block head %}{% if started and not editable and flex_choices is none and not tiebreak_form and not picks_form %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
 {% block content %}
 <h2>My team</h2>
 {% if editable %}
@@ -80,6 +80,37 @@
   {% if tiebreak_open %}<p class="muted"><a href="{{ url_for('home', edit='tiebreaker') }}">Change it</a> until <time datetime="{{ last_game['kickoff'] }}">{{ last_game['kickoff'] }}</time>.</p>{% endif %}
   {% else %}
   <p>{{ last_game['short'] }} has kicked off and you have no tiebreaker in.</p>
+  {% endif %}
+</div>
+<h2>Game pick'em</h2>
+<div class="card">
+  {% if picks_form %}
+  <p class="muted">Pick the winner of each game. This is its own contest, scored apart from your fantasy team: the most right picks wins. You can change these until <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>
+  <form method="post" action="{{ url_for('submit_game_picks') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% for game in games %}
+    <label for="pick-{{ game['id'] }}">Who wins {{ game['short'] }}?</label>
+    <select id="pick-{{ game['id'] }}" name="pick-{{ game['id'] }}">
+      <option value="">No pick</option>
+      {% for team in game['teams'] %}
+      <option value="{{ team['abbr'] }}"{% if game_picks.get(game['id']) == team['abbr'] %} selected{% endif %}>{{ team['name'] }}</option>
+      {% endfor %}
+    </select>
+    {% endfor %}
+    <button class="primary">Save my picks</button>
+  </form>
+  {% elif game_picks %}
+  <table>
+    {% for cell in pick_cells %}
+    <tr>
+      <td class="slot">{{ cell['short'] }}</td>
+      <td>{% if cell['pick'] %}{{ cell['pick'] }}{% if cell['right'] is not none %} {{ '✓' if cell['right'] else '✗' }}{% endif %}{% else %}<span class="muted">No pick</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if picks_open %}<p class="muted"><a href="{{ url_for('home', edit='picks') }}">Change them</a> until <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>{% endif %}
+  {% else %}
+  <p>The game picks are locked and you have none in.</p>
   {% endif %}
 </div>
 {% endblock %}

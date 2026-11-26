@@ -408,6 +408,33 @@ def test_equal_totals_are_ordered_by_the_tiebreaker_once_the_last_game_ends(tmp_
     assert "locked when" in post(amy, "/tiebreaker", winner="BUF", total="49").get_data(as_text=True)
 
 
+def test_game_picks_are_scored_apart_from_fantasy_and_hidden_until_they_lock(tmp_path, clock):
+    application = pickem.create_app(
+        tmp_path / "pickem.db",
+        {**TWO_GAMES, "picks_lock_at": "2026-11-26T19:00Z"},
+        now=lambda: clock["now"],
+        fetch=lambda path: FINAL if "g2" in path else SUMMARY,
+        secret_key="test",
+    )
+    amy, bob, zed = join(application, "Amy"), join(application, "Bob"), join(application, "Zed")
+    clock["now"] = AFTER_KICKOFF  # teams are locked; game picks are still open
+
+    refused = post(amy, "/game-picks", **{"pick-g1": "BUF"}).get_data(as_text=True)
+    assert "Choose a team playing in CHI @ DET" in refused
+    post(amy, "/game-picks", **{"pick-g1": "DET", "pick-g2": "BUF"})
+    post(bob, "/game-picks", **{"pick-g2": "KC"})
+    hidden = page(zed, "/teams").split("Game pick'em")[1]
+    assert "Amy" not in hidden and "Game picks show at" in hidden
+
+    clock["now"] = AFTER_LAST_GAME
+    assert "game picks are locked" in post(bob, "/game-picks", **{"pick-g2": "BUF"}).get_data(as_text=True)
+    standings = page(zed, "/teams").split("Game pick'em")[1]
+    assert standings.index("Amy") < standings.index("Bob")
+    assert "DET</td>" in standings  # CHI @ DET is not final, so that pick is unmarked
+    assert "BUF ✓" in standings and "KC ✗" in standings
+    assert "Zed" not in standings
+
+
 def test_a_final_game_reports_its_score_and_winner():
     result = espn.parse_fantasy_points(FINAL)
 

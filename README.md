@@ -29,6 +29,7 @@ python -m venv .venv
 - **Lock time:** `pickem.py lock 2026-11-26T18:11Z` locks and shows every team at that UTC time instead of first kickoff; restart `serve` to apply it.
 - **Late flex:** a locked team that was saved without a FLEX can add one once, from a game that has not kicked off.
 - **Tiebreaker:** on the My team page each person picks the winner of the day's last game and its total score, changeable until that game kicks off and hidden from others until then. Once that game is final, equal fantasy totals are ordered by the right winner first, then the closest total.
+- **Game pick'em:** a separate contest on the My team page. Each person may pick the winner of each game; the most right picks wins, apart from the fantasy standings. Picks lock and show with the teams, or at the time set by `pickem.py lock-picks 2026-11-26T18:45Z`.
 - **Reveal:** nobody sees another person's team until the day's first kickoff. After that the Everyone page is a leaderboard that refreshes about once a minute.
 - **Scoring:** full-point PPR from ESPN's box score; the tables are `PLAYER_POINTS`, `DEFENSE_POINTS` and `POINTS_ALLOWED_TIERS` in espn.py. Two-point conversions, safeties, blocked kicks and field-goal distance bonuses are not scored.
 - **Ranking:** each position's list is ordered best first by ESPN's projected points for the current week, shown after each name. `init` loads them; `pickem.py projections` refreshes them, then restart `serve`. The numbers use ESPN's standard full-PPR scoring (`FANTASY_SCORING` in espn.py), not a private league's own scoring.

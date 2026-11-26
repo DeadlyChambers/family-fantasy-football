@@ -4,6 +4,7 @@ One roster per person, changeable until the first kickoff of the day; after
 that only the commish can reopen it. The Everyone page hides rosters until
 that kickoff, then shows every roster with live fantasy points. Each person
 also guesses the last game's winner and total score, which orders equal totals.
+Picking each game's winner is a separate contest with its own standings.
 
 Accepted risk: there are no passwords. Typing a name logs in as that person,
 so anyone with the link can open or change another person's team before
@@ -61,6 +62,10 @@ CREATE TABLE IF NOT EXISTS tiebreakers (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     winner TEXT NOT NULL,
     total INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS game_picks (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    picks TEXT NOT NULL
 );
 """
 
@@ -120,6 +125,29 @@ def validate_tiebreaker(form, game):
     if not (total.isascii() and total.isdigit() and int(total) <= MAX_TIEBREAK_TOTAL):
         return None, f"The total score is a whole number from 0 to {MAX_TIEBREAK_TOTAL}."
     return {"winner": winner, "total": int(total)}, None
+
+
+def validate_game_picks(form, games):
+    picks = {}
+    for game in games:
+        pick = form.get(f"pick-{game['id']}", "")
+        if not pick:
+            continue
+        if pick not in [team["abbr"] for team in game["teams"]]:
+            return None, f"Choose a team playing in {game['short']}."
+        picks[game["id"]] = pick
+    return picks, None
+
+
+def game_pick_view(picks, games, results):
+    """Return (one cell per game, number right); a cell's "right" stays None until its game is final."""
+    cells = []
+    for game in games:
+        pick = picks.get(game["id"])
+        result = results.get(game["id"], {})
+        right = pick == result["winner"] if pick and result.get("state") == "post" else None
+        cells.append({"short": game["short"], "pick": pick, "right": right})
+    return cells, sum(1 for cell in cells if cell["right"])
 
 
 def tiebreak_rank(tiebreak, final):
@@ -200,6 +228,8 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     options = options_by_position(pool)
     lock_at = pool.get("lock_at")
     reveal_at = parse_time(lock_at) if lock_at else min(kickoff(game) for game in pool["games"])
+    picks_lock = pool.get("picks_lock_at")
+    picks_lock_at = parse_time(picks_lock) if picks_lock else reveal_at
     live = LiveScores(pool["games"], fetch, now)
     last_game = max(pool["games"], key=kickoff)
     kickoff_by_team = {team["abbr"]: kickoff(game) for game in pool["games"] for team in game["teams"]}
@@ -213,6 +243,13 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
 
     def tiebreak_open():
         return now() < kickoff(last_game)
+
+    def picks_open():
+        return now() < picks_lock_at
+
+    def load_game_picks(user_id):
+        row = g.db.execute("SELECT picks FROM game_picks WHERE user_id = ?", (user_id,)).fetchone()
+        return json.loads(row["picks"]) if row else {}
 
     def load_slots(user_id):
         row = g.db.execute("SELECT slots FROM picks WHERE user_id = ?", (user_id,)).fetchone()
@@ -245,7 +282,12 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         def csrf_token():
             return session.setdefault("csrf", secrets.token_hex(16))
 
-        return {"csrf_token": csrf_token, "user": g.get("user"), "reveal_at": reveal_at.isoformat()}
+        return {
+            "csrf_token": csrf_token,
+            "user": g.get("user"),
+            "reveal_at": reveal_at.isoformat(),
+            "picks_lock_at": picks_lock_at.isoformat(),
+        }
 
     @app.before_request
     def gate_request():
@@ -296,9 +338,10 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     def render_home(chosen, status=200):
         slots = load_slots(g.user["id"])
         started = revealed()
-        points = live.snapshot()[0] if started else {}
+        points, _, _, results = live.snapshot() if started else ({}, {}, False, {})
         rows, total = roster_view(slots, players, points) if slots else ([], 0)
         tiebreak = g.db.execute("SELECT * FROM tiebreakers WHERE user_id = ?", (g.user["id"],)).fetchone()
+        game_picks = load_game_picks(g.user["id"])
         page = render_template(
             "home.html",
             editable=can_edit(),
@@ -314,6 +357,11 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             tiebreak_form=tiebreak_open() and (tiebreak is None or request.args.get("edit") == "tiebreaker"),
             last_game=last_game,
             max_total=MAX_TIEBREAK_TOTAL,
+            games=pool["games"],
+            game_picks=game_picks,
+            pick_cells=game_pick_view(game_picks, pool["games"], results)[0],
+            picks_open=picks_open(),
+            picks_form=picks_open() and (not game_picks or request.args.get("edit") == "picks"),
         )
         return page, status
 
@@ -378,6 +426,24 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         flash("Your tiebreaker is saved.")
         return redirect(url_for("home"))
 
+    @app.post("/game-picks")
+    def submit_game_picks():
+        if not picks_open():
+            flash("The game picks are locked.")
+            return redirect(url_for("home"))
+        picks, error = validate_game_picks(request.form, pool["games"])
+        if error:
+            flash(error)
+            return redirect(url_for("home", edit="picks"))
+        g.db.execute(
+            "INSERT INTO game_picks (user_id, picks) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET picks = excluded.picks",
+            (g.user["id"], json.dumps(picks)),
+        )
+        g.db.commit()
+        flash("Your game picks are saved.")
+        return redirect(url_for("home"))
+
     @app.route("/teams")
     def teams():
         users = g.db.execute("SELECT id, name FROM users ORDER BY name").fetchall()
@@ -416,8 +482,24 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             {"short": game["short"], "kickoff": game["kickoff"], "detail": details.get(game["id"])}
             for game in pool["games"]
         ]
+        # Other people's game picks stay hidden while they can still be changed.
+        pickem = []
+        if not picks_open():
+            saved = g.db.execute("SELECT u.name, p.picks FROM game_picks p JOIN users u ON u.id = p.user_id")
+            for row in saved:
+                cells, right = game_pick_view(json.loads(row["picks"]), pool["games"], results)
+                if any(cell["pick"] for cell in cells):
+                    pickem.append({"name": row["name"], "cells": cells, "right": right})
+            pickem.sort(key=lambda entry: (-entry["right"], entry["name"].lower()))
         return render_template(
-            "teams.html", revealed=True, entries=entries, games=games, delayed=delayed, last_game=last_game
+            "teams.html",
+            revealed=True,
+            entries=entries,
+            games=games,
+            delayed=delayed,
+            last_game=last_game,
+            pickem=pickem,
+            picks_shown=not picks_open(),
         )
 
     @app.route("/commish")
@@ -505,9 +587,9 @@ def lock_command(args):
     if not aware:
         raise SystemExit(f"'{args.at}' is not a time with a zone. Use UTC like 2026-11-26T18:11Z.")
     pool = json.loads(POOL_PATH.read_text(encoding="utf-8"))
-    pool["lock_at"] = args.at
+    pool[args.key] = args.at
     POOL_PATH.write_text(json.dumps(pool, indent=1), encoding="utf-8")
-    print(f"Teams lock and show at {args.at}. Restart serve to apply it.")
+    print(f"{args.key} set to {args.at}. Restart serve to apply it.")
 
 
 def serve_command(args):
@@ -538,7 +620,10 @@ def main():
     projections.set_defaults(run=projections_command)
     lock = commands.add_parser("lock", help="lock and show every team at a set time instead of first kickoff")
     lock.add_argument("at", help="UTC time such as 2026-11-26T18:11Z")
-    lock.set_defaults(run=lock_command)
+    lock.set_defaults(run=lock_command, key="lock_at")
+    lock_picks = commands.add_parser("lock-picks", help="lock and show the game picks at a set time instead of with the teams")
+    lock_picks.add_argument("at", help="UTC time such as 2026-11-26T19:00Z")
+    lock_picks.set_defaults(run=lock_command, key="picks_lock_at")
     serve = commands.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8080, type=int)

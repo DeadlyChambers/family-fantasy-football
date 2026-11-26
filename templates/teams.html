@@ -35,5 +35,24 @@
   {% if entry['tiebreak'] %}<p class="muted">Tiebreaker: {{ entry['tiebreak']['winner'] }} wins {{ last_game['short'] }}, total score {{ entry['tiebreak']['total'] }}</p>{% endif %}
 </div>
 {% endfor %}
+<h2>Game pick'em</h2>
+<div class="card">
+  {% if not picks_shown %}
+  <p class="muted">Game picks show at <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>
+  {% elif pickem %}
+  <table>
+    <tr><th></th>{% for game in games %}<th>{{ game['short'] }}</th>{% endfor %}<th class="num">Right</th></tr>
+    {% for entry in pickem %}
+    <tr>
+      <td>{{ entry['name'] }}</td>
+      {% for cell in entry['cells'] %}<td>{% if cell['pick'] %}{{ cell['pick'] }}{% if cell['right'] is not none %} {{ '✓' if cell['right'] else '✗' }}{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>{% endfor %}
+      <td class="num">{{ entry['right'] }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">Nobody made game picks.</p>
+  {% endif %}
+</div>
 {% endif %}
 {% endblock %}
