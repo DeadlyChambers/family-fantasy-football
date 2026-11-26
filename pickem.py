@@ -2,7 +2,8 @@
 
 One roster per person, changeable until the first kickoff of the day; after
 that only the commish can reopen it. The Everyone page hides rosters until
-that kickoff, then shows every roster with live fantasy points.
+that kickoff, then shows every roster with live fantasy points. Each person
+also guesses the last game's winner and total score, which orders equal totals.
 
 Accepted risk: there are no passwords. Typing a name logs in as that person,
 so anyone with the link can open or change another person's team before
@@ -35,11 +36,14 @@ SLOTS = (
     ("WR1", "WR"),
     ("WR2", "WR"),
     ("TE", "TE"),
+    ("FLEX", "FLEX"),
     ("DEF", "DEF"),
     ("K", "K"),
 )
+FLEX_POSITIONS = ("RB", "WR", "TE")
 SCORE_TTL_SECONDS = 60
 MAX_NAME_LENGTH = 30
+MAX_TIEBREAK_TOTAL = 200
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -52,6 +56,11 @@ CREATE TABLE IF NOT EXISTS picks (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     slots TEXT NOT NULL,
     submitted_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tiebreakers (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    winner TEXT NOT NULL,
+    total INTEGER NOT NULL
 );
 """
 
@@ -69,14 +78,22 @@ def add_user(db, name):
     db.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (name.strip(),))
 
 
+def parse_time(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
 def kickoff(game):
-    return datetime.fromisoformat(game["kickoff"].replace("Z", "+00:00"))
+    return parse_time(game["kickoff"])
+
+
+def eligible(position):
+    return FLEX_POSITIONS if position == "FLEX" else (position,)
 
 
 def options_by_position(pool):
     return {
         position: sorted(
-            (p for p in pool["players"] if p["pos"] == position),
+            (p for p in pool["players"] if p["pos"] in eligible(position)),
             key=lambda p: (-(p.get("proj") or 0), p["name"]),
         )
         for position in {position for _, position in SLOTS}
@@ -87,7 +104,7 @@ def validate_picks(form, players):
     slots = {}
     for slot, position in SLOTS:
         player = players.get(form.get(slot, ""))
-        if player is None or player["pos"] != position:
+        if player is None or player["pos"] not in eligible(position):
             return None, f"Choose a player for {slot}."
         if player["id"] in slots.values():
             return None, f"{player['name']} is on your team twice."
@@ -95,9 +112,32 @@ def validate_picks(form, players):
     return slots, None
 
 
+def validate_tiebreaker(form, game):
+    winner = form.get("winner", "")
+    total = form.get("total", "").strip()
+    if winner not in [team["abbr"] for team in game["teams"]]:
+        return None, f"Choose who wins {game['short']}."
+    if not (total.isascii() and total.isdigit() and int(total) <= MAX_TIEBREAK_TOTAL):
+        return None, f"The total score is a whole number from 0 to {MAX_TIEBREAK_TOTAL}."
+    return {"winner": winner, "total": int(total)}, None
+
+
+def tiebreak_rank(tiebreak, final):
+    """Order among equal fantasy totals: the right winner first, then the closest combined score."""
+    if tiebreak is None:
+        return (1, float("inf"))
+    actual = sum(final["scores"].values())
+    return (0 if tiebreak["winner"] == final["winner"] else 1, abs(tiebreak["total"] - actual))
+
+
 def roster_view(slots, players, points):
     rows = [
-        {"slot": slot, "player": players.get(slots.get(slot)), "points": points.get(slots.get(slot), 0)}
+        {
+            "slot": slot,
+            "picked": slot in slots,
+            "player": players.get(slots.get(slot)),
+            "points": points.get(slots.get(slot), 0),
+        }
         for slot, _ in SLOTS
     ]
     return rows, round(sum(row["points"] for row in rows), 2)
@@ -116,7 +156,7 @@ class LiveScores:
         self._failed = set()
 
     def snapshot(self):
-        """Return (points by player id, status text by game id, True when a game's scores are stale)."""
+        """Return (points by player id, status text by game id, True when scores are stale, result by game id)."""
         with self._lock:
             now = self._now()
             for game in self._games:
@@ -127,7 +167,7 @@ class LiveScores:
             for game_id, result in self._results.items():
                 points.update(result["points"])
                 details[game_id] = result["detail"]
-            return points, details, bool(self._failed)
+            return points, details, bool(self._failed), dict(self._results)
 
     def _is_due(self, game_id, now):
         result = self._results.get(game_id)
@@ -158,8 +198,11 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     now = now or (lambda: datetime.now(timezone.utc))
     players = {player["id"]: player for player in pool["players"]}
     options = options_by_position(pool)
-    reveal_at = min(kickoff(game) for game in pool["games"])
+    lock_at = pool.get("lock_at")
+    reveal_at = parse_time(lock_at) if lock_at else min(kickoff(game) for game in pool["games"])
     live = LiveScores(pool["games"], fetch, now)
+    last_game = max(pool["games"], key=kickoff)
+    kickoff_by_team = {team["abbr"]: kickoff(game) for game in pool["games"] for team in game["teams"]}
 
     db = connect(db_path)
     db.executescript(SCHEMA)
@@ -168,12 +211,25 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     def revealed():
         return now() >= reveal_at
 
+    def tiebreak_open():
+        return now() < kickoff(last_game)
+
     def load_slots(user_id):
         row = g.db.execute("SELECT slots FROM picks WHERE user_id = ?", (user_id,)).fetchone()
         return json.loads(row["slots"]) if row else None
 
     def can_edit():
         return bool(g.user["unlocked"]) or not revealed()
+
+    def late_flex_choices(slots):
+        """Flex options for a locked team saved without one: players not on it whose game has not kicked off."""
+        if not slots or "FLEX" in slots or can_edit():
+            return None
+        return [
+            p
+            for p in options["FLEX"]
+            if p["id"] not in slots.values() and now() < kickoff_by_team[p["team"]]
+        ]
 
     def commish_only(view):
         @functools.wraps(view)
@@ -242,6 +298,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         started = revealed()
         points = live.snapshot()[0] if started else {}
         rows, total = roster_view(slots, players, points) if slots else ([], 0)
+        tiebreak = g.db.execute("SELECT * FROM tiebreakers WHERE user_id = ?", (g.user["id"],)).fetchone()
         page = render_template(
             "home.html",
             editable=can_edit(),
@@ -251,6 +308,12 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             rows=rows,
             total=total,
             started=started,
+            flex_choices=late_flex_choices(slots),
+            tiebreak=tiebreak,
+            tiebreak_open=tiebreak_open(),
+            tiebreak_form=tiebreak_open() and (tiebreak is None or request.args.get("edit") == "tiebreaker"),
+            last_game=last_game,
+            max_total=MAX_TIEBREAK_TOTAL,
         )
         return page, status
 
@@ -281,6 +344,40 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             flash("Your team is saved. You can change it until kickoff.")
         return redirect(url_for("home"))
 
+    @app.post("/flex")
+    def add_flex():
+        slots = load_slots(g.user["id"])
+        choices = late_flex_choices(slots)
+        player = players.get(request.form.get("FLEX", ""))
+        if choices is None:
+            flash("Your flex cannot be changed here.")
+        elif player not in choices:
+            flash("Choose a flex from a game that has not kicked off.")
+        else:
+            slots["FLEX"] = player["id"]
+            g.db.execute("UPDATE picks SET slots = ? WHERE user_id = ?", (json.dumps(slots), g.user["id"]))
+            g.db.commit()
+            flash(f"{player['name']} is your flex.")
+        return redirect(url_for("home"))
+
+    @app.post("/tiebreaker")
+    def submit_tiebreaker():
+        if not tiebreak_open():
+            flash(f"The tiebreaker locked when {last_game['short']} kicked off.")
+            return redirect(url_for("home"))
+        tiebreak, error = validate_tiebreaker(request.form, last_game)
+        if error:
+            flash(error)
+            return redirect(url_for("home", edit="tiebreaker"))
+        g.db.execute(
+            "INSERT INTO tiebreakers (user_id, winner, total) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET winner = excluded.winner, total = excluded.total",
+            (g.user["id"], tiebreak["winner"], tiebreak["total"]),
+        )
+        g.db.commit()
+        flash("Your tiebreaker is saved.")
+        return redirect(url_for("home"))
+
     @app.route("/teams")
     def teams():
         users = g.db.execute("SELECT id, name FROM users ORDER BY name").fetchall()
@@ -291,18 +388,37 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         if not revealed():
             waiting = [{"name": u["name"], "submitted": u["id"] in picks} for u in users]
             return render_template("teams.html", revealed=False, waiting=waiting)
-        points, details, delayed = live.snapshot()
+        points, details, delayed, results = live.snapshot()
+        final = results.get(last_game["id"], {})
+        decided = final.get("state") == "post"
+        # Other people's tiebreakers stay hidden while they can still be changed.
+        tiebreaks = (
+            {}
+            if tiebreak_open()
+            else {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
+        )
         entries = []
         for member in users:
             slots = picks.get(member["id"])
             rows, total = roster_view(slots, players, points) if slots else ([], 0)
-            entries.append({"name": member["name"], "rows": rows, "total": total})
-        entries.sort(key=lambda entry: (-entry["total"], entry["name"].lower()))
+            tiebreak = tiebreaks.get(member["id"])
+            entries.append(
+                {
+                    "name": member["name"],
+                    "rows": rows,
+                    "total": total,
+                    "tiebreak": tiebreak,
+                    "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
+                }
+            )
+        entries.sort(key=lambda entry: (-entry["total"], entry["rank"], entry["name"].lower()))
         games = [
             {"short": game["short"], "kickoff": game["kickoff"], "detail": details.get(game["id"])}
             for game in pool["games"]
         ]
-        return render_template("teams.html", revealed=True, entries=entries, games=games, delayed=delayed)
+        return render_template(
+            "teams.html", revealed=True, entries=entries, games=games, delayed=delayed, last_game=last_game
+        )
 
     @app.route("/commish")
     @commish_only
@@ -379,6 +495,21 @@ def projections_command(args):
     print(f"Week {week} projections set for {ranked} of {len(pool['players'])} players. Restart serve to show them.")
 
 
+def lock_command(args):
+    if not POOL_PATH.exists():
+        raise SystemExit("No player pool yet. Run: python pickem.py init")
+    try:
+        aware = parse_time(args.at).tzinfo is not None
+    except ValueError:
+        aware = False
+    if not aware:
+        raise SystemExit(f"'{args.at}' is not a time with a zone. Use UTC like 2026-11-26T18:11Z.")
+    pool = json.loads(POOL_PATH.read_text(encoding="utf-8"))
+    pool["lock_at"] = args.at
+    POOL_PATH.write_text(json.dumps(pool, indent=1), encoding="utf-8")
+    print(f"Teams lock and show at {args.at}. Restart serve to apply it.")
+
+
 def serve_command(args):
     from waitress import serve
 
@@ -405,6 +536,9 @@ def main():
     init.set_defaults(run=init_command)
     projections = commands.add_parser("projections", help="refresh ESPN's projected points in the player pool")
     projections.set_defaults(run=projections_command)
+    lock = commands.add_parser("lock", help="lock and show every team at a set time instead of first kickoff")
+    lock.add_argument("at", help="UTC time such as 2026-11-26T18:11Z")
+    lock.set_defaults(run=lock_command)
     serve = commands.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8080, type=int)

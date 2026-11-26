@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block head %}{% if started and not editable %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
+{% block head %}{% if started and not editable and flex_choices is none and not tiebreak_form %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
 {% block content %}
 <h2>My team</h2>
 {% if editable %}
@@ -7,16 +7,16 @@
   {% if started %}
   <p class="muted">The commish reopened your team. Pick one player per spot; submitting locks it again.</p>
   {% else %}
-  <p class="muted">Pick one player per spot from today's games. {% if rows %}Your team is saved; you{% else %}You{% endif %} can change it until first kickoff, <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>. Then every team locks and everyone's teams show. Players are listed best first by ESPN's projected points for this week, shown after each name.</p>
+  <p class="muted">Pick one player per spot from today's games. {% if rows %}Your team is saved; you{% else %}You{% endif %} can change it until <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>. Then every team locks and everyone's teams show. Players are listed best first by ESPN's projected points for this week, shown after each name.</p>
   {% endif %}
   <form method="post" action="{{ url_for('submit_picks') }}"{% if started %} onsubmit="return confirm('Submit and lock your team?');"{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     {% for slot, position in slots %}
-    <label for="{{ slot }}">{{ slot }}</label>
+    <label for="{{ slot }}">{{ slot }}{% if position == 'FLEX' %} (RB, WR or TE){% endif %}</label>
     <select id="{{ slot }}" name="{{ slot }}" required>
       <option value="">Choose a {{ position }}</option>
       {% for player in options[position] %}
-      <option value="{{ player['id'] }}"{% if chosen.get(slot) == player['id'] %} selected{% endif %}>{{ player['name'] }} ({{ player['team'] }}){% if player.get('proj') is not none %} {{ "%.1f"|format(player['proj']) }}{% endif %}</option>
+      <option value="{{ player['id'] }}"{% if chosen.get(slot) == player['id'] %} selected{% endif %}>{{ player['name'] }} ({{ player['team'] }}{% if position == 'FLEX' %} {{ player['pos'] }}{% endif %}){% if player.get('proj') is not none %} {{ "%.1f"|format(player['proj']) }}{% endif %}</option>
       {% endfor %}
     </select>
     {% endfor %}
@@ -37,4 +37,49 @@
   <p>Kickoff has passed and you have no team in. Ask the commish to open one for you.</p>
 </div>
 {% endif %}
+{% if flex_choices is not none %}
+<h2>Add your flex</h2>
+<div class="card">
+  <p class="muted">Your team was saved before the flex spot was added. Pick one RB, WR or TE from a game that has not kicked off. It locks as soon as you save it.</p>
+  {% if flex_choices %}
+  <form method="post" action="{{ url_for('add_flex') }}" onsubmit="return confirm('Save this flex? It cannot be changed.');">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label for="late-flex">FLEX (RB, WR or TE)</label>
+    <select id="late-flex" name="FLEX" required>
+      <option value="">Choose a flex</option>
+      {% for player in flex_choices %}
+      <option value="{{ player['id'] }}">{{ player['name'] }} ({{ player['team'] }} {{ player['pos'] }}){% if player.get('proj') is not none %} {{ "%.1f"|format(player['proj']) }}{% endif %}</option>
+      {% endfor %}
+    </select>
+    <button class="primary">Save my flex</button>
+  </form>
+  {% else %}
+  <p>Every game has kicked off, so no flex can be added.</p>
+  {% endif %}
+</div>
+{% endif %}
+<h2>Tiebreaker</h2>
+<div class="card">
+  {% if tiebreak_form %}
+  <p class="muted">If fantasy totals are equal, the right {{ last_game['short'] }} winner goes first, then the closest total score. You can change this until <time datetime="{{ last_game['kickoff'] }}">{{ last_game['kickoff'] }}</time>.</p>
+  <form method="post" action="{{ url_for('submit_tiebreaker') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label for="tiebreak-winner">Who wins {{ last_game['short'] }}?</label>
+    <select id="tiebreak-winner" name="winner" required>
+      <option value="">Choose the winner</option>
+      {% for team in last_game['teams'] %}
+      <option value="{{ team['abbr'] }}"{% if tiebreak and tiebreak['winner'] == team['abbr'] %} selected{% endif %}>{{ team['name'] }}</option>
+      {% endfor %}
+    </select>
+    <label for="tiebreak-total">Total score, both teams added together</label>
+    <input id="tiebreak-total" name="total" type="number" inputmode="numeric" min="0" max="{{ max_total }}" required value="{{ tiebreak['total'] if tiebreak else '' }}">
+    <button class="primary">Save my tiebreaker</button>
+  </form>
+  {% elif tiebreak %}
+  <p>{{ tiebreak['winner'] }} wins {{ last_game['short'] }}, total score {{ tiebreak['total'] }}.</p>
+  {% if tiebreak_open %}<p class="muted"><a href="{{ url_for('home', edit='tiebreaker') }}">Change it</a> until <time datetime="{{ last_game['kickoff'] }}">{{ last_game['kickoff'] }}</time>.</p>{% endif %}
+  {% else %}
+  <p>{{ last_game['short'] }} has kicked off and you have no tiebreaker in.</p>
+  {% endif %}
+</div>
 {% endblock %}

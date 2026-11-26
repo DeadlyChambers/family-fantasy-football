@@ -173,13 +173,19 @@ def defense_points(own_stats, opponent_stats, points_allowed):
 
 
 def parse_fantasy_points(summary):
-    """Return {"state", "detail", "points"} for one game; points stay empty until kickoff."""
+    """Return {"state", "detail", "points", "scores", "winner"} for one game.
+
+    Points and scores stay empty until kickoff. The winner stays None until the
+    game is final, and after a tie.
+    """
     competition = summary["header"]["competitions"][0]
     status = competition["status"]["type"]
     result = {
         "state": status["state"],
         "detail": status.get("shortDetail") or status.get("description") or status["state"],
         "points": {},
+        "scores": {},
+        "winner": None,
     }
     if status["state"] == "pre":
         return result
@@ -207,4 +213,9 @@ def parse_fantasy_points(summary):
         points[defense_id(abbr)] = defense_points(
             team_stats.get(abbr, {}), team_stats.get(opponent, {}), scores[opponent]
         )
+    result["scores"] = {abbr: int(score) for abbr, score in scores.items()}
+    if status["state"] == "post":
+        best = max(scores.values())
+        leaders = [abbr for abbr, score in scores.items() if score == best]
+        result["winner"] = leaders[0] if len(leaders) == 1 else None
     return result

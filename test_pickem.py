@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -7,6 +8,7 @@ import pickem
 
 BEFORE_KICKOFF = datetime(2026, 11, 26, 17, 0, tzinfo=timezone.utc)
 AFTER_KICKOFF = datetime(2026, 11, 26, 18, 30, tzinfo=timezone.utc)
+AFTER_LAST_GAME = datetime(2026, 11, 27, 5, 0, tzinfo=timezone.utc)
 
 
 def player(player_id, name, position, team):
@@ -34,12 +36,52 @@ POOL = {
         player("w1", "Wes Wideout", "WR", "DET"),
         player("w2", "Walt Catcher", "WR", "CHI"),
         player("t1", "Ty Tightend", "TE", "DET"),
+        player("t2", "Tad Flexer", "TE", "CHI"),
         player("k1", "Kip Kicker", "K", "DET"),
         player("DEF-DET", "Detroit Lions", "DEF", "DET"),
         player("DEF-CHI", "Chicago Bears", "DEF", "CHI"),
     ],
 }
-ROSTER = {"QB": "q1", "RB1": "r1", "RB2": "r2", "WR1": "w1", "WR2": "w2", "TE": "t1", "DEF": "DEF-DET", "K": "k1"}
+ROSTER = {
+    "QB": "q1",
+    "RB1": "r1",
+    "RB2": "r2",
+    "WR1": "w1",
+    "WR2": "w2",
+    "TE": "t1",
+    "FLEX": "t2",
+    "DEF": "DEF-DET",
+    "K": "k1",
+}
+TWO_GAMES = {
+    **POOL,
+    "games": [
+        *POOL["games"],
+        {
+            "id": "g2",
+            "kickoff": "2026-11-27T01:20Z",
+            "short": "KC @ BUF",
+            "teams": [
+                {"id": "12", "abbr": "KC", "name": "Kansas City Chiefs"},
+                {"id": "2", "abbr": "BUF", "name": "Buffalo Bills"},
+            ],
+        },
+    ],
+    "players": [*POOL["players"], player("b1", "Bo Backup", "RB", "BUF")],
+}
+FINAL = {
+    "header": {
+        "competitions": [
+            {
+                "status": {"type": {"state": "post", "shortDetail": "Final"}},
+                "competitors": [
+                    {"team": {"abbreviation": "BUF"}, "score": "28"},
+                    {"team": {"abbreviation": "KC"}, "score": "21"},
+                ],
+            }
+        ]
+    }
+}
 
 
 def stat_line(player_id, stats):
@@ -293,6 +335,85 @@ def test_leaderboard_ranks_teams_by_live_points(app, clock):
     assert "39.50" in board  # Papaw: same roster without q1 and the DET defense
     assert "1. Jill" in board and "2. Papaw" in board and "3. Shane" in board
     assert "No team submitted" in board
+
+
+def two_game_app(tmp_path, clock):
+    return pickem.create_app(
+        tmp_path / "pickem.db",
+        TWO_GAMES,
+        now=lambda: clock["now"],
+        fetch=lambda path: FINAL if "g2" in path else SUMMARY,
+        secret_key="test",
+    )
+
+
+def test_a_lock_time_in_the_pool_replaces_first_kickoff(tmp_path, clock):
+    application = pickem.create_app(
+        tmp_path / "pickem.db",
+        {**POOL, "lock_at": "2026-11-26T18:11Z"},
+        now=lambda: clock["now"],
+        fetch=lambda path: SUMMARY,
+        secret_key="test",
+    )
+    jill = join(application, "Jill")
+
+    clock["now"] = datetime(2026, 11, 26, 18, 5, tzinfo=timezone.utc)
+    assert "Your team is saved" in post(jill, "/picks", **ROSTER).get_data(as_text=True)
+
+    clock["now"] = datetime(2026, 11, 26, 18, 12, tzinfo=timezone.utc)
+    assert "Your team is locked" in post(jill, "/picks", **ROSTER).get_data(as_text=True)
+
+
+def test_a_locked_team_saved_without_a_flex_adds_one_from_a_game_not_kicked_off(tmp_path, clock):
+    application = two_game_app(tmp_path, clock)
+    jill = join(application, "Jill")
+    post(jill, "/picks", **ROSTER)
+    # A team saved before the flex spot existed.
+    db = pickem.connect(tmp_path / "pickem.db")
+    db.execute("UPDATE picks SET slots = ?", (json.dumps({k: v for k, v in ROSTER.items() if k != "FLEX"}),))
+    db.commit()
+    db.close()
+    clock["now"] = AFTER_KICKOFF
+
+    mine = page(jill, "/")
+    assert "Bo Backup (BUF RB)" in mine
+    assert "Tad Flexer" not in mine  # his game has kicked off
+
+    assert "Not picked" in post(jill, "/flex", FLEX="t2").get_data(as_text=True)
+
+    saved = post(jill, "/flex", FLEX="b1").get_data(as_text=True)
+    assert "Bo Backup is your flex" in saved
+    assert "Add your flex" not in saved
+
+
+def test_equal_totals_are_ordered_by_the_tiebreaker_once_the_last_game_ends(tmp_path, clock):
+    application = two_game_app(tmp_path, clock)
+    amy, bob, zed = join(application, "Amy"), join(application, "Bob"), join(application, "Zed")
+    for client in (amy, bob, zed):
+        post(client, "/picks", **ROSTER)
+    assert "Choose who wins" in post(amy, "/tiebreaker", winner="DET", total="49").get_data(as_text=True)
+    post(amy, "/tiebreaker", winner="KC", total="49")  # exact total, wrong winner
+    post(zed, "/tiebreaker", winner="BUF", total="60")  # right winner, 11 off
+    post(bob, "/tiebreaker", winner="BUF", total="45")  # right winner, 4 off
+
+    clock["now"] = AFTER_KICKOFF
+    early = page(amy, "/teams")
+    assert "1. Amy" in early and "2. Bob" in early and "3. Zed" in early
+    assert "Tiebreaker:" not in early
+
+    clock["now"] = AFTER_LAST_GAME
+    board = page(amy, "/teams")
+    assert "1. Bob" in board and "2. Zed" in board and "3. Amy" in board
+    assert "Tiebreaker: KC wins KC @ BUF, total score 49" in board
+    assert "locked when" in post(amy, "/tiebreaker", winner="BUF", total="49").get_data(as_text=True)
+
+
+def test_a_final_game_reports_its_score_and_winner():
+    result = espn.parse_fantasy_points(FINAL)
+
+    assert result["scores"] == {"BUF": 28, "KC": 21}
+    assert result["winner"] == "BUF"
+    assert espn.parse_fantasy_points(SUMMARY)["winner"] is None
 
 
 def test_roster_keeps_fantasy_positions_from_the_active_roster():
