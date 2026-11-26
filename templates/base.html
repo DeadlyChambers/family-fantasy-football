@@ -27,8 +27,20 @@
   td, th { padding: 7px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.slot { width: 3.2em; color: #6b5a40; font-size: 14px; }
-  .team-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  input[type=checkbox] { width: auto; }
+  label.check { font-weight: 400; }
+  button:disabled { opacity: .5; }
+  .team-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .team-head h3 { margin: 0; font-size: 19px; }
+  .who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .who .muted { display: block; font-size: 14px; }
+  .avatar { flex: none; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--field); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+  .tabs { display: flex; gap: 8px; margin: 0 0 14px; }
+  .tabs a { padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--ink); text-decoration: none; font-size: 15px; }
+  .tabs a.on { background: var(--field); border-color: var(--field); color: #fff; font-weight: 700; }
+  .compact td { vertical-align: middle; }
+  .compact td.rank { width: 1.6em; color: #6b5a40; }
+  .compact .avatar { width: 30px; height: 30px; font-size: 14px; }
   .total { font-size: 22px; font-weight: 800; color: var(--field); font-variant-numeric: tabular-nums; }
   .muted { color: #6b5a40; font-size: 15px; }
   .stats { color: #6b5a40; font-size: 13px; margin-top: 2px; }

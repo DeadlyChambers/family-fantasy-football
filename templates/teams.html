@@ -19,14 +19,39 @@
   {% endfor %}
 </ul>
 {% if delayed %}<p class="flash">ESPN is not answering right now, so some scores are behind. This page retries every minute.</p>{% endif %}
-{% include "_scores_at.html" %}
+<p class="tabs">
+  <a href="{{ url_for('teams') }}"{% if not compact %} class="on"{% endif %}>Teams</a>
+  <a href="{{ url_for('teams', view='compact') }}"{% if compact %} class="on"{% endif %}>Compact</a>
+</p>
 {% set started = true %}
+{% set who_tag = 'h3' %}
+{% if compact %}
+<div class="card">
+  <table class="compact">
+    <tr><th></th><th>Team</th><th class="num">Pts</th><th class="num">Proj</th><th class="num">Min left</th></tr>
+    {% for entry in entries %}
+    <tr>
+      <td class="rank">{{ loop.index }}</td>
+      <td>{% set who = entry %}{% set who_tag = 'strong' %}{% set who_prefix = '' %}{% include "_who.html" %}</td>
+      <td class="num"><strong>{{ "%.2f"|format(entry['total']) }}</strong></td>
+      <td class="num">{{ "%.2f"|format(entry['outlook']['projected']) }}</td>
+      <td class="num">{{ entry['outlook']['minutes'] }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if scores_at %}<p class="muted">Scores updated <time datetime="{{ scores_at }}">{{ scores_at }}</time>.</p>{% endif %}
+  <p class="muted">Proj is the points so far plus the part of ESPN's pregame projection that matches the game time left. Min left adds up the game minutes remaining for every player on the team.</p>
+</div>
+{% else %}
+{% include "_scores_at.html" %}
 {% for entry in entries %}
 <div class="card">
   <div class="team-head">
-    <h3>{{ loop.index }}. {{ entry['name'] }}</h3>
+    {% set who = entry %}{% set who_prefix = loop.index ~ '. ' %}{% include "_who.html" %}
     <span class="total">{{ "%.2f"|format(entry['total']) }}</span>
   </div>
+  {% set outlook = entry['outlook'] %}
+  {% include "_outlook.html" %}
   {% set rows = entry['rows'] %}
   {% include "_roster.html" %}
   {% set edits = entry['edits'] %}
@@ -34,6 +59,7 @@
   {% if entry['tiebreak'] %}<p class="muted">Tiebreaker: {{ entry['tiebreak']['winner'] }} wins {{ last_game['short'] }}, total score {{ entry['tiebreak']['total'] }}</p>{% endif %}
 </div>
 {% endfor %}
+{% endif %}
 {% if left_off %}<p class="muted">{{ left_off }} {{ 'person' if left_off == 1 else 'people' }} without a team {{ 'is' if left_off == 1 else 'are' }} not shown.</p>{% endif %}
 <h2>Game pick'em</h2>
 <div class="card">

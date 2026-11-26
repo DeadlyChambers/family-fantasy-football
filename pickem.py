@@ -25,7 +25,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, redirect, render_template, request, session, url_for
 
 import espn
 
@@ -52,13 +52,32 @@ CHANGE_SHOWN_SECONDS = 300
 MAX_NAME_LENGTH = 30
 MAX_TIEBREAK_TOTAL = 200
 OVER_UNDER_SIDES = ("over", "under")
+MAX_TEAM_NAME_LENGTH = 40
+# The My team page shrinks a picture to a small square before sending it, so a stored one is far under this.
+MAX_AVATAR_BYTES = 512 * 1024
+# A whole request above this is refused before it is read; a phone photo sent without shrinking fits under it.
+MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+# Leading bytes of the picture types a browser shows as a still image. SVG is left out: it can carry script.
+IMAGE_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
     is_commish INTEGER NOT NULL DEFAULT 0,
-    unlocked INTEGER NOT NULL DEFAULT 0
+    unlocked INTEGER NOT NULL DEFAULT 0,
+    team_name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS avatars (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    mime TEXT NOT NULL,
+    image BLOB NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS picks (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
@@ -82,10 +101,13 @@ CREATE TABLE IF NOT EXISTS roster_edits (
     players TEXT NOT NULL DEFAULT '[]'
 );
 """
-# roster_edits.players was added after the table first shipped; an older database gains it at startup.
-ADD_EDIT_PLAYERS = "ALTER TABLE roster_edits ADD COLUMN players TEXT NOT NULL DEFAULT '[]'"
+# Columns added after their table first shipped; an older database gains them at startup.
+ADDED_COLUMNS = (
+    ("roster_edits", "players", "TEXT NOT NULL DEFAULT '[]'"),
+    ("users", "team_name", "TEXT NOT NULL DEFAULT ''"),
+)
 HIDDEN_NOTE = "changed a spot, shown when that game kicks off"
-USER_TABLES = ("picks", "tiebreakers", "game_picks", "roster_edits")
+USER_TABLES = ("picks", "tiebreakers", "game_picks", "roster_edits", "avatars")
 
 log = logging.getLogger(__name__)
 
@@ -269,19 +291,57 @@ def player_stats(results):
     }
 
 
-def roster_view(slots, players, points, changes, stats):
-    rows = [
-        {
-            "slot": slot,
-            "picked": slot in slots,
-            "player": players.get(slots.get(slot)),
-            "points": points.get(slots.get(slot), 0),
-            "change": changes.get(slots.get(slot)),
-            "stats": stats.get(slots.get(slot), []),
-        }
-        for slot, _ in SLOTS
-    ]
+def image_type(data):
+    """The content type of a still picture a browser can show, read from its first bytes; None for anything else."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return next((mime for signature, mime in IMAGE_SIGNATURES if data.startswith(signature)), None)
+
+
+def minutes_by_team(games, results):
+    """Game minutes left for each team's players; a game ESPN has not been asked about yet has all of them."""
+    return {
+        team["abbr"]: results.get(game["id"], {}).get("minutes_left", espn.GAME_MINUTES)
+        for game in games
+        for team in game["teams"]
+    }
+
+
+def roster_view(slots, players, points, changes, stats, minutes):
+    """One row per roster spot, and the team's total points.
+
+    A row's "projected" is the points so far plus the share of ESPN's pregame
+    projection that matches the game time left, so it equals the projection
+    before kickoff and the points once the game is final.
+    """
+    rows = []
+    for slot, _ in SLOTS:
+        player = players.get(slots.get(slot))
+        scored = points.get(slots.get(slot), 0)
+        left = minutes.get(player["team"], 0) if player else 0
+        ahead = (player.get("proj") or 0) * left / espn.GAME_MINUTES if player else 0
+        rows.append(
+            {
+                "slot": slot,
+                "picked": slot in slots,
+                "player": player,
+                "points": scored,
+                "change": changes.get(slots.get(slot)),
+                "stats": stats.get(slots.get(slot), []),
+                "minutes": left,
+                "projected": round(scored + ahead, 2),
+            }
+        )
     return rows, round(sum(row["points"] for row in rows), 2)
+
+
+def outlook(rows):
+    """A team's projected total, its game minutes left added over its players, and how many players have any."""
+    return {
+        "projected": round(sum(row["projected"] for row in rows), 2),
+        "minutes": round(sum(row["minutes"] for row in rows)),
+        "playing": sum(1 for row in rows if row["minutes"]),
+    }
 
 
 class LiveScores:
@@ -360,6 +420,7 @@ def create_app(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+        MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
     )
     now = now or (lambda: datetime.now(timezone.utc))
     started_at = now()
@@ -376,9 +437,10 @@ def create_app(
 
     db = connect(db_path)
     db.executescript(SCHEMA)
-    if "players" not in {column["name"] for column in db.execute("PRAGMA table_info(roster_edits)")}:
-        db.execute(ADD_EDIT_PLAYERS)
-        db.commit()
+    for table, column, definition in ADDED_COLUMNS:
+        if column not in {found["name"] for found in db.execute(f"PRAGMA table_info({table})")}:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    db.commit()
     db.close()
 
     def revealed():
@@ -417,22 +479,28 @@ def create_app(
         """Ids of players whose game has not started; other people do not see these on a roster."""
         return {p["id"] for p in pool["players"] if now() < kickoff_by_team[p["team"]]}
 
-    def ranked_teams(points, changes, stats, final, tiebreaks):
+    def ranked_teams(points, changes, stats, minutes, final, tiebreaks):
         """People who picked a roster, best first; equal totals fall to the tiebreaker once the last game is final."""
         decided = final.get("state") == "post"
         board = []
-        for row in g.db.execute("SELECT u.id, u.name, p.slots FROM users u JOIN picks p ON p.user_id = u.id"):
+        for row in g.db.execute(
+            "SELECT u.id, u.name, u.team_name, p.slots, a.updated_at AS avatar_at "
+            "FROM users u JOIN picks p ON p.user_id = u.id LEFT JOIN avatars a ON a.user_id = u.id"
+        ):
             slots = json.loads(row["slots"])
             if not has_roster(slots):
                 continue
-            rows, total = roster_view(slots, players, points, changes, stats)
+            rows, total = roster_view(slots, players, points, changes, stats, minutes)
             tiebreak = tiebreaks.get(row["id"])
             board.append(
                 {
                     "id": row["id"],
                     "name": row["name"],
+                    "team_name": row["team_name"],
+                    "avatar_at": row["avatar_at"],
                     "rows": rows,
                     "total": total,
+                    "outlook": outlook(rows),
                     "tiebreak": tiebreak,
                     "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
                 }
@@ -458,7 +526,7 @@ def create_app(
         if any(results.get(game["id"], {}).get("state") != "post" for game in pool["games"]):
             return None
         tiebreaks = {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
-        board = ranked_teams(points, {}, {}, results[last_game["id"]], tiebreaks)
+        board = ranked_teams(points, {}, {}, {}, results[last_game["id"]], tiebreaks)
         if not board:
             return None
         record = {
@@ -527,6 +595,11 @@ def create_app(
         message = "That page was out of date, so nothing was saved. Go back, reload the page and try again."
         return render_template("problem.html", message=message), 400
 
+    @app.errorhandler(413)
+    def upload_too_big(_error):
+        message = "That picture is too big to send, so nothing was saved. Go back and choose a smaller one."
+        return render_template("problem.html", message=message), 413
+
     @app.errorhandler(403)
     def commish_needed(_error):
         name = g.user["name"] if g.get("user") else "nobody"
@@ -579,11 +652,19 @@ def create_app(
         started = revealed()
         points, _, _, results = live.snapshot() if started else ({}, {}, False, {})
         scores_at, changes = live.updates()
-        rows, total = roster_view(slots, players, points, changes, player_stats(results)) if slots else ([], 0)
+        minutes = minutes_by_team(pool["games"], results)
+        rows, total = (
+            roster_view(slots, players, points, changes, player_stats(results), minutes) if slots else ([], 0)
+        )
         tiebreak = g.db.execute("SELECT * FROM tiebreakers WHERE user_id = ?", (g.user["id"],)).fetchone()
         game_picks = load_game_picks(g.user["id"])
+        avatar_row = g.db.execute("SELECT updated_at FROM avatars WHERE user_id = ?", (g.user["id"],)).fetchone()
         page = render_template(
             "home.html",
+            profile_form=request.args.get("edit") == "profile",
+            me={**dict(g.user), "avatar_at": avatar_row["updated_at"] if avatar_row else None},
+            max_team_name=MAX_TEAM_NAME_LENGTH,
+            outlook=outlook(rows),
             editable=can_edit(),
             chosen=chosen if chosen is not None else (slots or {}),
             slots=SLOTS,
@@ -610,6 +691,46 @@ def create_app(
     @app.route("/")
     def home():
         return render_home(None)
+
+    @app.post("/profile")
+    def submit_profile():
+        """Save the person's team name and picture; both are decoration, so they stay changeable after the lock."""
+        team_name = " ".join(request.form.get("team_name", "").split())
+        upload = request.files.get("avatar")
+        image = upload.read(MAX_AVATAR_BYTES + 1) if upload else b""
+        mime = image_type(image)
+        if len(team_name) > MAX_TEAM_NAME_LENGTH:
+            flash(f"A team name can have up to {MAX_TEAM_NAME_LENGTH} characters.")
+        elif len(image) > MAX_AVATAR_BYTES:
+            flash("That picture is too big. Choose a smaller one.")
+        elif image and mime is None:
+            flash("That file is not a picture this page can show. Choose a PNG, JPEG, GIF or WebP.")
+        else:
+            g.db.execute("UPDATE users SET team_name = ? WHERE id = ?", (team_name, g.user["id"]))
+            if image:
+                g.db.execute(
+                    "INSERT INTO avatars (user_id, mime, image, updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET mime = excluded.mime, image = excluded.image, "
+                    "updated_at = excluded.updated_at",
+                    (g.user["id"], mime, image, now().isoformat()),
+                )
+            elif request.form.get("remove_avatar"):
+                g.db.execute("DELETE FROM avatars WHERE user_id = ?", (g.user["id"],))
+            g.db.commit()
+            flash("Your team name and picture are saved.")
+            return redirect(url_for("home"))
+        return redirect(url_for("home", edit="profile"))
+
+    @app.route("/avatar/<int:user_id>")
+    def avatar(user_id):
+        row = g.db.execute("SELECT mime, image FROM avatars WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            abort(404)
+        response = Response(row["image"], mimetype=row["mime"])
+        # The stored type came from the file's own first bytes; the browser must not guess another one.
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Cache-Control"] = "private, max-age=86400"
+        return response
 
     @app.post("/picks")
     def submit_picks():
@@ -715,7 +836,8 @@ def create_app(
         # A late flex or a commish change can still pick from a game that has not started,
         # so other people's players from that game stay hidden until it kicks off.
         unseen = not_kicked_off()
-        entries = ranked_teams(points, changes, player_stats(results), final, tiebreaks)
+        minutes = minutes_by_team(pool["games"], results)
+        entries = ranked_teams(points, changes, player_stats(results), minutes, final, tiebreaks)
         for entry in entries:
             entry["edits"] = edits.get(entry["id"], [])
             if entry["id"] != g.user["id"]:
@@ -741,6 +863,7 @@ def create_app(
         return render_template(
             "teams.html",
             revealed=True,
+            compact=request.args.get("view") == "compact",
             entries=entries,
             left_off=len(users) - len(entries),
             games=games,

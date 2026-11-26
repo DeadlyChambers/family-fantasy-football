@@ -1,7 +1,59 @@
 {% extends "base.html" %}
-{% block head %}{% if started and not editable and flex_choices is none and not tiebreak_form and not picks_form %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
+{% block head %}{% if started and not editable and flex_choices is none and not tiebreak_form and not picks_form and not profile_form %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
 {% block content %}
 <h2>My team</h2>
+<div class="card">
+  {% if profile_form %}
+  <form method="post" action="{{ url_for('submit_profile') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label for="team-name">Team name</label>
+    <input id="team-name" name="team_name" maxlength="{{ max_team_name }}" value="{{ me['team_name'] }}" placeholder="{{ me['name'] }}">
+    <label for="avatar-file">Picture</label>
+    <input id="avatar-file" name="avatar" type="file" accept="image/*">
+    <p class="muted">Any photo works. It is cropped to a square and shrunk before it is sent.</p>
+    {% if me['avatar_at'] %}<label class="check"><input type="checkbox" name="remove_avatar" value="1"> Remove my picture</label>{% endif %}
+    <button class="primary" id="profile-save">Save</button>
+  </form>
+  <p class="muted"><a href="{{ url_for('home') }}">Cancel</a></p>
+  <script>
+    (function () {
+      var input = document.getElementById("avatar-file");
+      var save = document.getElementById("profile-save");
+      var side = 256;
+      input.addEventListener("change", function () {
+        var file = input.files[0];
+        if (!file || !window.DataTransfer || !window.URL) { return; }
+        save.disabled = true;
+        var picture = new Image();
+        var done = function () { save.disabled = false; URL.revokeObjectURL(picture.src); };
+        picture.onerror = done;
+        picture.onload = function () {
+          var crop = Math.min(picture.naturalWidth, picture.naturalHeight);
+          var canvas = document.createElement("canvas");
+          canvas.width = canvas.height = side;
+          canvas.getContext("2d").drawImage(
+            picture, (picture.naturalWidth - crop) / 2, (picture.naturalHeight - crop) / 2, crop, crop, 0, 0, side, side
+          );
+          canvas.toBlob(function (small) {
+            if (small) {
+              var swap = new DataTransfer();
+              swap.items.add(new File([small], "avatar.jpg", { type: "image/jpeg" }));
+              input.files = swap.files;
+            }
+            done();
+          }, "image/jpeg", 0.85);
+        };
+        picture.src = URL.createObjectURL(file);
+      });
+    })();
+  </script>
+  {% else %}
+  <div class="team-head">
+    {% set who = me %}{% set who_tag = 'h3' %}{% set who_prefix = '' %}{% include "_who.html" %}
+    <a href="{{ url_for('home', edit='profile') }}">{% if me['team_name'] or me['avatar_at'] %}Change name or picture{% else %}Add a team name and picture{% endif %}</a>
+  </div>
+  {% endif %}
+</div>
 {% if editable %}
 <div class="card">
   {% if started %}
@@ -21,6 +73,7 @@
     <h3>Locked in</h3>
     {% if started %}<span class="total">{{ "%.2f"|format(total) }}</span>{% endif %}
   </div>
+  {% if started %}{% include "_outlook.html" %}{% endif %}
   {% include "_roster.html" %}
   {% include "_edits.html" %}
   {% include "_scores_at.html" %}

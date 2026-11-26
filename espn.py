@@ -58,6 +58,9 @@ DEFENSE_LABELS = {"sack": "sacks", "interception": "INT", "fumble_recovery": "fu
 # (most points allowed, bonus), checked in order; anything above the last tier gets the floor.
 POINTS_ALLOWED_TIERS = ((0, 10), (6, 7), (13, 4), (20, 1), (27, 0), (34, -1))
 POINTS_ALLOWED_FLOOR = -4
+GAME_MINUTES = 60
+QUARTERS = 4
+QUARTER_MINUTES = GAME_MINUTES / QUARTERS
 
 
 def fetch_json(path):
@@ -227,8 +230,24 @@ def parse_over_under(summary):
     return None
 
 
+def minutes_left(status):
+    """Game minutes still to play, from a competition's status block: 60 before kickoff, 0 once final.
+
+    Overtime counts only what its clock shows.
+    """
+    state = status["type"]["state"]
+    if state == "pre":
+        return float(GAME_MINUTES)
+    if state == "post":
+        return 0.0
+    minutes, _, seconds = str(status.get("displayClock", "0:00")).partition(":")
+    on_clock = _number(minutes) + _number(seconds) / 60
+    quarters_after = max(QUARTERS - int(_number(status.get("period")) or 1), 0)
+    return round(quarters_after * QUARTER_MINUTES + on_clock, 2)
+
+
 def parse_fantasy_points(summary):
-    """Return {"state", "detail", "points", "stats", "scores", "winner"} for one game.
+    """Return {"state", "detail", "minutes_left", "points", "stats", "scores", "winner"} for one game.
 
     Points, stats and scores stay empty until kickoff. "stats" lists, per player
     id, the {"text", "points"} entries that add up to that player's points. The
@@ -239,6 +258,7 @@ def parse_fantasy_points(summary):
     result = {
         "state": status["state"],
         "detail": status.get("shortDetail") or status.get("description") or status["state"],
+        "minutes_left": minutes_left(competition["status"]),
         "points": {},
         "stats": {},
         "scores": {},

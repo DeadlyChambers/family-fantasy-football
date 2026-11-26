@@ -1,4 +1,6 @@
 import copy
+import html
+import io
 import json
 import re
 import subprocess
@@ -323,6 +325,63 @@ def test_each_players_scoring_stats_are_listed_and_add_up_to_their_points(app, c
     assert '80 rush yds <span class="pts">+8</span>' in mine
     assert '1 fum lost <span class="pts">-2</span>' in mine
     assert '10 pts allowed <span class="pts">+4</span>' in page(jill, "/teams")
+
+
+@pytest.mark.parametrize(
+    ("status", "minutes"),
+    [
+        ({"type": {"state": "pre"}}, 60),
+        ({"type": {"state": "in"}, "displayClock": "3:30", "period": 2}, 33.5),
+        ({"type": {"state": "in"}, "displayClock": "0:00", "period": 2}, 30),  # halftime
+        ({"type": {"state": "in"}, "displayClock": "7:00", "period": 5}, 7),  # overtime
+        ({"type": {"state": "post"}}, 0),
+    ],
+)
+def test_game_minutes_left_come_from_the_period_and_the_clock(status, minutes):
+    assert espn.minutes_left(status) == minutes
+
+
+def test_each_team_shows_a_projected_score_and_its_minutes_left(tmp_path, clock):
+    midway = copy.deepcopy(SUMMARY)
+    midway["header"]["competitions"][0]["status"].update(displayClock="5:00", period=2)  # 35 of 60 minutes left
+    pool = {**POOL, "players": [{**p, "proj": 12.0} if p["id"] == "q1" else p for p in POOL["players"]]}
+    application = pickem.create_app(
+        tmp_path / "pickem.db", pool, now=lambda: clock["now"], fetch=lambda path: midway, secret_key="test"
+    )
+    jill, papaw = join(application, "Jill"), join(application, "Papaw")
+    post(jill, "/picks", **ROSTER)
+    clock["now"] = AFTER_KICKOFF
+
+    board = page(papaw, "/teams")
+    assert "proj 24.0" in board  # Quinn Passer: 17 so far plus 12 projected x 35/60
+    # 73.50 so far plus Quinn Passer's 7 still projected; 9 players x 35 minutes
+    assert "Projected <strong>80.50</strong> · 9 players with 315 min left" in board
+
+    compact = page(papaw, "/teams?view=compact")
+    assert "Quinn Passer" not in compact  # the compact tab lists teams, not rosters
+    assert re.search(r"Jill.*>73\.50<.*>80\.50<.*>315<", compact, re.S)
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + bytes(16)
+
+
+def test_a_person_sets_a_team_name_and_picture_that_everyone_sees(app, clock):
+    jill, papaw = join(app, "Jill"), join(app, "Papaw")
+    post(jill, "/picks", **ROSTER)
+
+    script = (io.BytesIO(b"<svg onload=alert(1)>"), "me.svg")
+    refused = post(jill, "/profile", team_name="Gravy Train", avatar=script).get_data(as_text=True)
+    assert "That file is not a picture this page can show." in refused
+    assert "Gravy Train" not in refused and 'class="avatar" src=' not in refused
+
+    saved = post(jill, "/profile", team_name="  Gravy   Train ", avatar=(io.BytesIO(PNG), "me.png"))
+    assert "Gravy Train</h3>" in saved.get_data(as_text=True)
+
+    clock["now"] = AFTER_KICKOFF
+    board = page(papaw, "/teams")
+    assert "1. Gravy Train</h3>" in board and '<span class="muted">Jill</span>' in board
+    picture = papaw.get(html.unescape(re.search(r'<img class="avatar" src="([^"]+)"', board).group(1)))
+    assert picture.data == PNG and picture.mimetype == "image/png"
 
 
 def test_no_points_before_a_game_kicks_off():
