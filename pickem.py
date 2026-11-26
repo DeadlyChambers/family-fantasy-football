@@ -3,9 +3,11 @@
 One roster per person, changeable until the first kickoff of the day; after
 that only the commish can reopen it, change it or delete the team, and each
 commish change is listed on the team. The Everyone page hides rosters until
-that kickoff, then shows every roster with live fantasy points. Each person
+that kickoff, then shows every picked roster with live fantasy points. Each person
 also guesses the last game's winner and total score, which orders equal totals.
 Picking each game's winner is a separate contest with its own standings.
+The hall of fame page lists each year's winner from hall_of_fame.json, which
+outlives pickem.db; the commish saves a finished contest into it.
 
 Accepted risk: there are no passwords. Typing a name logs in as that person,
 so anyone with the link can open or change another person's team before
@@ -31,6 +33,7 @@ ROOT = Path(__file__).parent
 DB_PATH = ROOT / "pickem.db"
 POOL_PATH = ROOT / "pickem_pool.json"
 SECRET_PATH = ROOT / ".pickem_secret"
+HALL_PATH = ROOT / "hall_of_fame.json"
 
 SLOTS = (
     ("QB", "QB"),
@@ -238,6 +241,27 @@ def tiebreak_rank(tiebreak, final):
     return (0 if tiebreak["winner"] == final["winner"] else 1, abs(tiebreak["total"] - actual))
 
 
+def has_roster(slots):
+    """A spot the commish emptied leaves a roster; a person who never picked anyone has none."""
+    return any(slots.get(slot) for slot, _ in SLOTS)
+
+
+def load_hall(path):
+    """Past contests, newest first; a missing file is an empty hall."""
+    if not path.exists():
+        return []
+    return sorted(json.loads(path.read_text(encoding="utf-8")), key=lambda entry: -entry["year"])
+
+
+def save_hall_year(path, record):
+    """Put one year's result in the hall file, replacing only that year's earlier entry."""
+    kept = [entry for entry in load_hall(path) if entry["year"] != record["year"]]
+    hall = sorted([*kept, record], key=lambda entry: -entry["year"])
+    draft = path.with_name(path.name + ".tmp")
+    draft.write_text(json.dumps(hall, indent=2) + "\n", encoding="utf-8", newline="\n")
+    draft.replace(path)
+
+
 def roster_view(slots, players, points, changes):
     rows = [
         {
@@ -319,7 +343,9 @@ class LiveScores:
         self._failed.discard(game_id)
 
 
-def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, version=UNVERSIONED):
+def create_app(
+    db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, version=UNVERSIONED, hall_path=HALL_PATH
+):
     app = Flask(__name__)
     app.secret_key = secret_key or secrets.token_hex(32)
     app.config.update(
@@ -337,6 +363,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
     picks_lock_at = parse_time(picks_lock) if picks_lock else reveal_at
     live = LiveScores(pool["games"], fetch, now)
     last_game = max(pool["games"], key=kickoff)
+    year = kickoff(last_game).year
     kickoff_by_team = {team["abbr"]: kickoff(game) for game in pool["games"] for team in game["teams"]}
 
     db = connect(db_path)
@@ -381,6 +408,60 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
     def not_kicked_off():
         """Ids of players whose game has not started; other people do not see these on a roster."""
         return {p["id"] for p in pool["players"] if now() < kickoff_by_team[p["team"]]}
+
+    def ranked_teams(points, changes, final, tiebreaks):
+        """People who picked a roster, best first; equal totals fall to the tiebreaker once the last game is final."""
+        decided = final.get("state") == "post"
+        board = []
+        for row in g.db.execute("SELECT u.id, u.name, p.slots FROM users u JOIN picks p ON p.user_id = u.id"):
+            slots = json.loads(row["slots"])
+            if not has_roster(slots):
+                continue
+            rows, total = roster_view(slots, players, points, changes)
+            tiebreak = tiebreaks.get(row["id"])
+            board.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "rows": rows,
+                    "total": total,
+                    "tiebreak": tiebreak,
+                    "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
+                }
+            )
+        board.sort(key=lambda entry: (-entry["total"], entry["rank"], entry["name"].lower()))
+        return board
+
+    def pickem_board(results):
+        """People who made a game pick, most right first."""
+        board = []
+        for row in g.db.execute("SELECT u.name, p.picks FROM game_picks p JOIN users u ON u.id = p.user_id"):
+            cells, right = game_pick_view(json.loads(row["picks"]), pool["games"], results)
+            if any(cell["pick"] or cell["side"] for cell in cells):
+                board.append({"name": row["name"], "cells": cells, "right": right})
+        board.sort(key=lambda entry: (-entry["right"], entry["name"].lower()))
+        return board
+
+    def this_year():
+        """This contest shaped like a hall of fame entry once every game is final; None before that."""
+        if now() < kickoff(last_game):
+            return None
+        points, _details, _delayed, results = live.snapshot()
+        if any(results.get(game["id"], {}).get("state") != "post" for game in pool["games"]):
+            return None
+        tiebreaks = {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
+        board = ranked_teams(points, {}, results[last_game["id"]], tiebreaks)
+        if not board:
+            return None
+        record = {
+            "year": year,
+            "winner": board[0]["name"],
+            "scores": [{"name": entry["name"], "score": entry["total"]} for entry in board],
+        }
+        picks = pickem_board(results)
+        if picks:
+            record["pickem"] = [{"name": entry["name"], "right": entry["right"]} for entry in picks]
+        return record
 
     def can_edit():
         return bool(g.user["unlocked"]) or not revealed()
@@ -616,7 +697,6 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
         points, details, delayed, results = live.snapshot()
         scores_at, changes = live.updates()
         final = results.get(last_game["id"], {})
-        decided = final.get("state") == "post"
         # Other people's tiebreakers stay hidden while they can still be changed.
         tiebreaks = (
             {}
@@ -627,29 +707,18 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
         # A late flex or a commish change can still pick from a game that has not started,
         # so other people's players from that game stay hidden until it kicks off.
         unseen = not_kicked_off()
-        entries = []
-        for member in users:
-            slots = picks.get(member["id"])
-            rows, total = roster_view(slots, players, points, changes) if slots else ([], 0)
-            notes = edits.get(member["id"], [])
-            if member["id"] != g.user["id"]:
-                rows = [
+        entries = ranked_teams(points, changes, final, tiebreaks)
+        for entry in entries:
+            entry["edits"] = edits.get(entry["id"], [])
+            if entry["id"] != g.user["id"]:
+                entry["rows"] = [
                     {**row, "player": None, "hidden": True} if row["player"] and row["player"]["id"] in unseen else row
-                    for row in rows
+                    for row in entry["rows"]
                 ]
-                notes = [{**note, "note": HIDDEN_NOTE} if unseen.intersection(note["players"]) else note for note in notes]
-            tiebreak = tiebreaks.get(member["id"])
-            entries.append(
-                {
-                    "name": member["name"],
-                    "rows": rows,
-                    "total": total,
-                    "edits": notes,
-                    "tiebreak": tiebreak,
-                    "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
-                }
-            )
-        entries.sort(key=lambda entry: (-entry["total"], entry["rank"], entry["name"].lower()))
+                entry["edits"] = [
+                    {**note, "note": HIDDEN_NOTE} if unseen.intersection(note["players"]) else note
+                    for note in entry["edits"]
+                ]
         games = [
             {
                 "short": game["short"],
@@ -660,18 +729,12 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             for game in pool["games"]
         ]
         # Other people's game picks stay hidden while they can still be changed.
-        pickem = []
-        if not picks_open():
-            saved = g.db.execute("SELECT u.name, p.picks FROM game_picks p JOIN users u ON u.id = p.user_id")
-            for row in saved:
-                cells, right = game_pick_view(json.loads(row["picks"]), pool["games"], results)
-                if any(cell["pick"] or cell["side"] for cell in cells):
-                    pickem.append({"name": row["name"], "cells": cells, "right": right})
-            pickem.sort(key=lambda entry: (-entry["right"], entry["name"].lower()))
+        pickem = [] if picks_open() else pickem_board(results)
         return render_template(
             "teams.html",
             revealed=True,
             entries=entries,
+            left_off=len(users) - len(entries),
             games=games,
             delayed=delayed,
             scores_at=scores_at.isoformat() if scores_at else None,
@@ -679,6 +742,32 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             pickem=pickem,
             picks_shown=not picks_open(),
         )
+
+    @app.route("/hall-of-fame")
+    def hall_of_fame():
+        saved = load_hall(hall_path)
+        current = this_year()
+        years = [entry for entry in saved if not (current and entry["year"] == year)]
+        if current:
+            years.insert(0, current)
+        return render_template(
+            "hall_of_fame.html",
+            years=years,
+            year=year,
+            current=current,
+            on_file=any(entry["year"] == year for entry in saved),
+        )
+
+    @app.post("/commish/hall-of-fame")
+    @commish_only
+    def commish_hall_of_fame():
+        record = this_year()
+        if record is None:
+            flash(f"{year} is not final yet, so nothing was saved.")
+        else:
+            save_hall_year(hall_path, record)
+            flash(f"{year} is saved to the hall of fame: {record['winner']} won.")
+        return redirect(url_for("hall_of_fame"))
 
     @app.route("/commish")
     @commish_only

@@ -27,17 +27,14 @@
     <h3>{{ loop.index }}. {{ entry['name'] }}</h3>
     <span class="total">{{ "%.2f"|format(entry['total']) }}</span>
   </div>
-  {% if entry['rows'] %}
   {% set rows = entry['rows'] %}
   {% include "_roster.html" %}
-  {% else %}
-  <p class="muted">No team submitted.</p>
-  {% endif %}
   {% set edits = entry['edits'] %}
   {% include "_edits.html" %}
   {% if entry['tiebreak'] %}<p class="muted">Tiebreaker: {{ entry['tiebreak']['winner'] }} wins {{ last_game['short'] }}, total score {{ entry['tiebreak']['total'] }}</p>{% endif %}
 </div>
 {% endfor %}
+{% if left_off %}<p class="muted">{{ left_off }} {{ 'person' if left_off == 1 else 'people' }} without a team {{ 'is' if left_off == 1 else 'are' }} not shown.</p>{% endif %}
 <h2>Game pick'em</h2>
 <div class="card">
   {% if not picks_shown %}

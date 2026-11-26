@@ -202,8 +202,8 @@ def test_a_new_name_starts_a_team_until_kickoff(app, clock):
     clock["now"] = AFTER_KICKOFF
     late = post(app.test_client(), "/login", name="Cousin").get_data(as_text=True)
     assert "New teams closed at kickoff" in late
-    board = page(join(app, "Jill"), "/teams")
-    assert "Grandma" in board and "Cousin" not in board
+    members = page(join(app, "Shane"), "/commish")
+    assert "Grandma" in members and "Cousin" not in members
 
 
 def test_a_team_can_be_changed_until_kickoff_and_then_locks(app, clock):
@@ -336,8 +336,79 @@ def test_leaderboard_ranks_teams_by_live_points(app, clock):
 
     assert "73.50" in board  # Jill: 17 + 15.5 + 0 + 18 + 0 + 0 + 17 + 6
     assert "39.50" in board  # Papaw: same roster without q1 and the DET defense
-    assert "1. Jill" in board and "2. Papaw" in board and "3. Shane" in board
-    assert "No team submitted" in board
+    assert "1. Jill" in board and "2. Papaw" in board
+
+
+def test_people_without_a_team_are_left_off_the_leaderboard_after_kickoff(app, tmp_path, clock):
+    jill, papaw = join(app, "Jill"), join(app, "Papaw")
+    post(jill, "/picks", **ROSTER)
+    post(papaw, "/picks", **ROSTER)
+    # A spot the commish emptied: still a team.
+    db = pickem.connect(tmp_path / "pickem.db")
+    db.execute(
+        "UPDATE picks SET slots = ? WHERE user_id = (SELECT id FROM users WHERE name = 'Papaw')",
+        (json.dumps({slot: chosen for slot, chosen in ROSTER.items() if slot != "K"}),),
+    )
+    db.commit()
+    db.close()
+
+    waiting = page(jill, "/teams")
+    assert "Papaw" in waiting and "Shane" in waiting  # before kickoff everyone is listed
+
+    clock["now"] = AFTER_KICKOFF
+    board = page(papaw, "/teams")
+    assert "1. Jill</h3>" in board and "2. Papaw</h3>" in board
+    assert "Shane</h3>" not in board and "No team submitted" not in board
+    assert "1 person without a team is not shown." in board
+
+
+def test_the_hall_of_fame_lists_past_winners_and_the_commish_saves_a_finished_year(tmp_path, clock):
+    hall = tmp_path / "hall_of_fame.json"
+    hall.write_text(
+        json.dumps([{"year": 2025, "winner": "Jill"}, {"year": 2021, "winner": "Shane", "scores": [{"name": "Shane", "score": 178.9}]}]),
+        encoding="utf-8",
+    )
+    application = pickem.create_app(
+        tmp_path / "pickem.db",
+        TWO_GAMES,
+        now=lambda: clock["now"],
+        fetch=lambda path: FINAL,
+        secret_key="test",
+        hall_path=hall,
+    )
+    shane, amy, bob = join(application, "Shane"), join(application, "Amy"), join(application, "Bob")
+    db = pickem.connect(tmp_path / "pickem.db")
+    db.execute("UPDATE users SET is_commish = 1 WHERE name = 'Shane'")
+    db.commit()
+    db.close()
+    post(amy, "/picks", **ROSTER)
+    post(bob, "/picks", **{**ROSTER, "FLEX": "b1"})
+    post(amy, "/tiebreaker", winner="KC", total="49")
+    post(bob, "/tiebreaker", winner="BUF", total="49")
+    post(bob, "/game-picks", **{"pick-g2": "BUF"})
+
+    clock["now"] = AFTER_KICKOFF
+    early = page(amy, "/hall-of-fame")
+    assert "2026 is still being played" in early
+    assert early.index("<h3>2025</h3>") < early.index("<h3>2021</h3>")
+    assert "No scores on file for this year." in early and "178.90" in early
+    assert "nothing was saved" in post(shane, "/commish/hall-of-fame").get_data(as_text=True)
+
+    clock["now"] = AFTER_LAST_GAME
+    final = page(amy, "/hall-of-fame")
+    assert final.index("<h3>2026</h3>") < final.index("<h3>2025</h3>")
+    assert "1. Bob" in final and "2. Amy" in final  # equal totals, Bob picked the right winner
+    assert "Game pick'em: Bob (1 right)" in final
+    assert "Save 2026" not in final  # only the commish is offered the save
+    assert post(amy, "/commish/hall-of-fame").status_code == 403
+    assert [entry["year"] for entry in json.loads(hall.read_text(encoding="utf-8"))] == [2025, 2021]
+
+    saved = post(shane, "/commish/hall-of-fame").get_data(as_text=True)
+    assert "2026 is saved to the hall of fame: Bob won." in saved
+    on_file = json.loads(hall.read_text(encoding="utf-8"))
+    assert [entry["year"] for entry in on_file] == [2026, 2025, 2021]
+    assert on_file[0]["winner"] == "Bob" and [row["name"] for row in on_file[0]["scores"]] == ["Bob", "Amy"]
+    assert on_file[1] == {"year": 2025, "winner": "Jill"}
 
 
 def two_game_app(tmp_path, clock):
@@ -609,7 +680,8 @@ def test_the_commish_deletes_a_team_only_when_the_name_matches_the_id(app, clock
     assert "Jill and their team are deleted" in gone
     board = page(shane, "/teams")
     assert "Jill" not in board and "Quinn Passer" not in board
-    assert "Papaw" in board
+    members = page(shane, "/commish")
+    assert "Papaw" in members and "Jill" not in members
     assert "Log out" not in page(jill, "/")  # her session no longer opens a team
 
 

@@ -46,6 +46,7 @@
   <nav>
     <a href="{{ url_for('home') }}">My team</a>
     <a href="{{ url_for('teams') }}">Everyone</a>
+    <a href="{{ url_for('hall_of_fame') }}">Hall of fame</a>
     {% if user['is_commish'] %}<a href="{{ url_for('commish') }}">Commish</a>{% endif %}
     <span>{{ user['name'] }}</span>
     <form method="post" action="{{ url_for('logout') }}">
