@@ -28,7 +28,7 @@
 {% if compact %}
 <div class="card">
   <table class="compact">
-    <tr><th></th><th>Team</th><th class="num">Pts</th><th class="num">Proj</th><th class="num">Min left</th></tr>
+    <tr><th></th><th>Team</th><th class="num">Pts</th><th class="num">Proj</th><th class="num">Min</th></tr>
     {% for entry in entries %}
     <tr>
       <td class="rank">{{ loop.index }}</td>
@@ -40,7 +40,7 @@
     {% endfor %}
   </table>
   {% if scores_at %}<p class="muted">Scores updated <time datetime="{{ scores_at }}">{{ scores_at }}</time>.</p>{% endif %}
-  <p class="muted">Proj is the points so far plus the part of ESPN's pregame projection that matches the game time left. Min left adds up the game minutes remaining for every player on the team.</p>
+  <p class="muted">Proj is the points so far plus the part of ESPN's pregame projection that matches the game time left. Min adds up the game minutes left for every player on the team.</p>
 </div>
 {% else %}
 {% include "_scores_at.html" %}
