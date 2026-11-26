@@ -503,6 +503,28 @@ def test_a_change_to_a_reopened_team_after_the_lock_is_called_out(app, clock):
     assert "approved a change after reopening the team: added Other Thrower at QB, replacing Quinn Passer." in board
 
 
+def test_other_peoples_players_stay_hidden_until_their_game_kicks_off(tmp_path, clock):
+    application = two_game_app(tmp_path, clock)
+    jill, shane, papaw = join(application, "Jill"), join(application, "Shane"), join(application, "Papaw")
+    db = pickem.connect(tmp_path / "pickem.db")
+    db.execute("UPDATE users SET is_commish = 1 WHERE name = 'Shane'")
+    db.commit()
+    db.close()
+    post(jill, "/picks", **ROSTER)
+    clock["now"] = AFTER_KICKOFF
+    post(shane, "/commish/team/1", **{**ROSTER, "FLEX": "b1"})  # b1 plays in the game that has not started
+
+    board = page(papaw, "/teams")
+    assert "Quinn Passer" in board
+    assert "Bo Backup" not in board
+    assert "Hidden until that game kicks off" in board
+    assert "changed a spot, shown when that game kicks off." in board
+    assert "Bo Backup" in page(jill, "/teams")
+
+    clock["now"] = AFTER_LAST_GAME
+    assert "added Bo Backup at FLEX, replacing Tad Flexer." in page(papaw, "/teams")
+
+
 def test_a_refused_save_says_why(app, clock):
     jill = join(app, "Jill")
     clock["now"] = AFTER_KICKOFF

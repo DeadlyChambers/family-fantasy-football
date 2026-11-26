@@ -74,9 +74,13 @@ CREATE TABLE IF NOT EXISTS roster_edits (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     edited_at TEXT NOT NULL,
-    note TEXT NOT NULL
+    note TEXT NOT NULL,
+    players TEXT NOT NULL DEFAULT '[]'
 );
 """
+# roster_edits.players was added after the table first shipped; an older database gains it at startup.
+ADD_EDIT_PLAYERS = "ALTER TABLE roster_edits ADD COLUMN players TEXT NOT NULL DEFAULT '[]'"
+HIDDEN_NOTE = "changed a spot, shown when that game kicks off"
 USER_TABLES = ("picks", "tiebreakers", "game_picks", "roster_edits")
 
 log = logging.getLogger(__name__)
@@ -153,7 +157,7 @@ def validate_picks(form, players, allow_empty=False):
 
 
 def edit_notes(before, after, players):
-    """One phrase per roster spot that differs, such as "added X at QB, replacing Y"."""
+    """One (phrase, player ids it names) pair per roster spot that differs, such as "added X at QB, replacing Y"."""
 
     def name(player_id):
         player = players.get(player_id)
@@ -165,11 +169,11 @@ def edit_notes(before, after, players):
         if old == new:
             continue
         if new is None:
-            notes.append(f"removed {name(old)} from {slot}")
+            notes.append((f"removed {name(old)} from {slot}", [old]))
         elif old is None:
-            notes.append(f"added {name(new)} at {slot}")
+            notes.append((f"added {name(new)} at {slot}", [new]))
         else:
-            notes.append(f"added {name(new)} at {slot}, replacing {name(old)}")
+            notes.append((f"added {name(new)} at {slot}, replacing {name(old)}", [new, old]))
     return notes
 
 
@@ -312,6 +316,9 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
 
     db = connect(db_path)
     db.executescript(SCHEMA)
+    if "players" not in {column["name"] for column in db.execute("PRAGMA table_info(roster_edits)")}:
+        db.execute(ADD_EDIT_PLAYERS)
+        db.commit()
     db.close()
 
     def revealed():
@@ -333,15 +340,22 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
 
     def load_edits():
         edits = {}
-        for row in g.db.execute("SELECT user_id, edited_at, note FROM roster_edits ORDER BY id"):
-            edits.setdefault(row["user_id"], []).append(row)
+        for row in g.db.execute("SELECT user_id, edited_at, note, players FROM roster_edits ORDER BY id"):
+            edits.setdefault(row["user_id"], []).append(
+                {"edited_at": row["edited_at"], "note": row["note"], "players": json.loads(row["players"])}
+            )
         return edits
 
     def record_edits(user_id, notes):
+        """Store (phrase, player ids it names) pairs; the ids decide when other people may read the phrase."""
         g.db.executemany(
-            "INSERT INTO roster_edits (user_id, edited_at, note) VALUES (?, ?, ?)",
-            [(user_id, now().isoformat(), note) for note in notes],
+            "INSERT INTO roster_edits (user_id, edited_at, note, players) VALUES (?, ?, ?, ?)",
+            [(user_id, now().isoformat(), note, json.dumps(named)) for note, named in notes],
         )
+
+    def not_kicked_off():
+        """Ids of players whose game has not started; other people do not see these on a roster."""
+        return {p["id"] for p in pool["players"] if now() < kickoff_by_team[p["team"]]}
 
     def can_edit():
         return bool(g.user["unlocked"]) or not revealed()
@@ -493,7 +507,10 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             return render_home(request.form, 400)
         if started:
             changes = edit_notes(load_slots(g.user["id"]) or {}, slots, players)
-            record_edits(g.user["id"], [f"approved a change after reopening the team: {note}" for note in changes])
+            record_edits(
+                g.user["id"],
+                [(f"approved a change after reopening the team: {note}", named) for note, named in changes],
+            )
         g.db.execute(
             "INSERT INTO picks (user_id, slots, submitted_at) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET slots = excluded.slots, submitted_at = excluded.submitted_at",
@@ -579,17 +596,27 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             else {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
         )
         edits = load_edits()
+        # A late flex or a commish change can still pick from a game that has not started,
+        # so other people's players from that game stay hidden until it kicks off.
+        unseen = not_kicked_off()
         entries = []
         for member in users:
             slots = picks.get(member["id"])
             rows, total = roster_view(slots, players, points) if slots else ([], 0)
+            notes = edits.get(member["id"], [])
+            if member["id"] != g.user["id"]:
+                rows = [
+                    {**row, "player": None, "hidden": True} if row["player"] and row["player"]["id"] in unseen else row
+                    for row in rows
+                ]
+                notes = [{**note, "note": HIDDEN_NOTE} if unseen.intersection(note["players"]) else note for note in notes]
             tiebreak = tiebreaks.get(member["id"])
             entries.append(
                 {
                     "name": member["name"],
                     "rows": rows,
                     "total": total,
-                    "edits": edits.get(member["id"], []),
+                    "edits": notes,
                     "tiebreak": tiebreak,
                     "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
                 }
@@ -644,7 +671,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
     def commish_unlock(user_id):
         member = member_or_404(user_id)
         g.db.execute("UPDATE users SET unlocked = 1 WHERE id = ?", (user_id,))
-        record_edits(user_id, ["reopened the team for one more change"])
+        record_edits(user_id, [("reopened the team for one more change", [])])
         g.db.commit()
         flash(f"{member['name']} can change their team once, then it locks again.")
         return redirect(url_for("commish"))
