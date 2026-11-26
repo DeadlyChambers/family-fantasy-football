@@ -130,11 +130,9 @@ def post(client, path, **form):
     return client.post(path, data=form, follow_redirects=True)
 
 
-def join(app, name, password="gobble26"):
-    """Log in with the starter password and replace it, as each person does on first visit."""
+def join(app, name):
     client = app.test_client()
-    post(client, "/login", name=name, password=name)
-    post(client, "/account", name=name, password=password, confirm=password)
+    post(client, "/login", name=name)
     return client
 
 
@@ -142,31 +140,22 @@ def page(client, path):
     return client.get(path, follow_redirects=True).get_data(as_text=True)
 
 
-def test_starter_password_is_the_name_and_must_be_replaced(app):
+def test_a_name_alone_opens_that_persons_team(app):
     client = app.test_client()
-    landing = post(client, "/login", name="papaw", password=" Papaw ").get_data(as_text=True)
-    assert "Choose your name and password" in landing
-    assert client.get("/").headers["Location"].endswith("/account")
+    landing = post(client, "/login", name=" papaw ").get_data(as_text=True)
+    assert "Save my team" in landing
+    post(client, "/picks", **ROSTER)
 
-    refused = post(client, "/account", name="Papaw", password="papaw", confirm="papaw").get_data(as_text=True)
-    assert "not your name" in refused
-
-    post(client, "/account", name="Papaw", password="stuffing", confirm="stuffing")
-    assert "Choose a QB" in page(client, "/")
-
-    fresh = app.test_client()
-    assert "do not match" in post(fresh, "/login", name="Papaw", password="Papaw").get_data(as_text=True)
-    assert "My team" in post(fresh, "/login", name="Papaw", password="stuffing").get_data(as_text=True)
+    again = post(app.test_client(), "/login", name="PAPAW").get_data(as_text=True)
+    assert f'value="{ROSTER["QB"]}" selected' in again
 
 
 def test_a_new_name_starts_a_team_until_kickoff(app, clock):
-    newcomer = app.test_client()
-    assert "do not match" in post(newcomer, "/login", name="Grandma", password="wrong").get_data(as_text=True)
-    landing = post(newcomer, "/login", name="Grandma", password="grandma ").get_data(as_text=True)
-    assert "Choose your name and password" in landing
+    landing = post(app.test_client(), "/login", name="Grandma").get_data(as_text=True)
+    assert "Save my team" in landing
 
     clock["now"] = AFTER_KICKOFF
-    late = post(app.test_client(), "/login", name="Cousin", password="Cousin").get_data(as_text=True)
+    late = post(app.test_client(), "/login", name="Cousin").get_data(as_text=True)
     assert "New teams closed at kickoff" in late
     board = page(join(app, "Jill"), "/teams")
     assert "Grandma" in board and "Cousin" not in board
@@ -262,6 +251,33 @@ def test_no_points_before_a_game_kicks_off():
     pregame = {"header": {"competitions": [{"status": {"type": {"state": "pre"}}, "competitors": []}]}}
 
     assert espn.parse_fantasy_points(pregame)["points"] == {}
+
+
+def test_projections_are_keyed_like_the_pool():
+    def stat(week, total, source=1):
+        return {"statSourceId": source, "statSplitTypeId": 1, "scoringPeriodId": week, "appliedTotal": total}
+
+    payload = {
+        "players": [
+            {"id": 101, "player": {"proTeamId": 8, "stats": [stat(11, 9.0), stat(12, 30.0, source=0), stat(12, 21.44)]}},
+            {"id": -16008, "player": {"proTeamId": 8, "stats": [stat(12, 6.72)]}},
+        ]
+    }
+
+    assert espn.parse_projections(payload, 12, {"8": "DET"}) == {"101": 21.4, "DEF-DET": 6.7}
+
+
+def test_the_picker_lists_players_best_projection_first(tmp_path, clock):
+    projected = {"q2": 21.4, "q1": 9.0}
+    pool = {**POOL, "players": [{**p, "proj": projected.get(p["id"])} for p in POOL["players"]]}
+    application = pickem.create_app(
+        tmp_path / "pickem.db", pool, now=lambda: clock["now"], fetch=lambda path: SUMMARY, secret_key="test"
+    )
+
+    mine = page(join(application, "Jill"), "/")
+
+    assert mine.index("Other Thrower (CHI) 21.4") < mine.index("Quinn Passer (DET) 9.0")
+    assert "Rory Runner (DET)<" in mine
 
 
 def test_leaderboard_ranks_teams_by_live_points(app, clock):

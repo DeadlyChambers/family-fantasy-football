@@ -1,11 +1,12 @@
 """Thanksgiving pick'em web app.
 
-One roster per person. Submitting locks it; only the commish can reopen it.
-Other people's rosters stay hidden until the first kickoff of the day, then
-everyone sees every roster with live fantasy points.
+One roster per person, changeable until the first kickoff of the day; after
+that only the commish can reopen it. The Everyone page hides rosters until
+that kickoff, then shows every roster with live fantasy points.
 
-Accepted risk: a new account's password is its name, so until that person logs
-in and replaces it, anyone who knows the name can claim the account.
+Accepted risk: there are no passwords. Typing a name logs in as that person,
+so anyone with the link can open or change another person's team before
+kickoff, and can act as the commish by typing the commish's name.
 """
 import argparse
 import configparser
@@ -19,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
 
 import espn
 
@@ -39,15 +39,12 @@ SLOTS = (
     ("K", "K"),
 )
 SCORE_TTL_SECONDS = 60
-MIN_PASSWORD_LENGTH = 4
 MAX_NAME_LENGTH = 30
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    pw_hash TEXT NOT NULL,
-    must_change INTEGER NOT NULL DEFAULT 1,
     is_commish INTEGER NOT NULL DEFAULT 0,
     unlocked INTEGER NOT NULL DEFAULT 0
 );
@@ -67,15 +64,9 @@ def connect(db_path):
     return db
 
 
-def starter_hash(name):
-    return generate_password_hash(name.strip().lower())
-
-
 def add_user(db, name):
-    """Create the account with its name as the starter password; an existing account is left alone."""
-    db.execute(
-        "INSERT OR IGNORE INTO users (name, pw_hash) VALUES (?, ?)", (name.strip(), starter_hash(name))
-    )
+    """Create the account; an existing account is left alone."""
+    db.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (name.strip(),))
 
 
 def kickoff(game):
@@ -83,18 +74,11 @@ def kickoff(game):
 
 
 def options_by_position(pool):
-    team_order = [team["abbr"] for game in pool["games"] for team in game["teams"]]
     return {
-        position: [
-            (
-                abbr,
-                sorted(
-                    (p for p in pool["players"] if p["pos"] == position and p["team"] == abbr),
-                    key=lambda p: p["name"],
-                ),
-            )
-            for abbr in team_order
-        ]
+        position: sorted(
+            (p for p in pool["players"] if p["pos"] == position),
+            key=lambda p: (-(p.get("proj") or 0), p["name"]),
+        )
         for position in {position for _, position in SLOTS}
     }
 
@@ -109,21 +93,6 @@ def validate_picks(form, players):
             return None, f"{player['name']} is on your team twice."
         slots[slot] = player["id"]
     return slots, None
-
-
-def account_error(db, user, name, password, confirm):
-    if not 1 <= len(name) <= MAX_NAME_LENGTH:
-        return f"Your name needs 1 to {MAX_NAME_LENGTH} characters."
-    taken = db.execute("SELECT 1 FROM users WHERE name = ? AND id != ?", (name, user["id"])).fetchone()
-    if taken:
-        return "Someone else already uses that name."
-    if len(password) < MIN_PASSWORD_LENGTH:
-        return f"Your password needs at least {MIN_PASSWORD_LENGTH} characters."
-    if password.lower() in (name.lower(), user["name"].lower()):
-        return "Pick a password that is not your name."
-    if password != confirm:
-        return "The two passwords do not match."
-    return None
 
 
 def roster_view(slots, players, points):
@@ -235,8 +204,6 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
                 abort(400)
         if g.user is None and request.endpoint != "login":
             return redirect(url_for("login"))
-        if g.user and g.user["must_change"] and request.endpoint not in ("account", "logout"):
-            return redirect(url_for("account"))
         return None
 
     @app.teardown_request
@@ -249,47 +216,26 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     def login():
         if request.method == "POST":
             name = request.form.get("name", "").strip()
-            password = request.form.get("password", "")
             found = g.db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
-            if found is None and password.strip().lower() == name.lower() and 1 <= len(name) <= MAX_NAME_LENGTH:
-                if revealed():
-                    flash("New teams closed at kickoff. Ask the commish to add you.")
-                    return render_template("login.html")
-                add_user(g.db, name)
-                g.db.commit()
-                found = g.db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
-            if found and found["must_change"]:
-                # The starter password is the name; phones capitalise and pad it.
-                password = password.strip().lower()
-            if found and check_password_hash(found["pw_hash"], password):
+            if found is None and not 1 <= len(name) <= MAX_NAME_LENGTH:
+                flash(f"Your name needs 1 to {MAX_NAME_LENGTH} characters.")
+            elif found is None and revealed():
+                flash("New teams closed at kickoff. Ask the commish to add you.")
+            else:
+                if found is None:
+                    add_user(g.db, name)
+                    g.db.commit()
+                    found = g.db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
                 session.clear()
                 session["user_id"] = found["id"]
                 session.permanent = True
                 return redirect(url_for("home"))
-            flash("That name and password do not match.")
         return render_template("login.html")
 
     @app.post("/logout")
     def logout():
         session.clear()
         return redirect(url_for("login"))
-
-    @app.route("/account", methods=["GET", "POST"])
-    def account():
-        if request.method == "POST":
-            name = request.form.get("name", "").strip()
-            password = request.form.get("password", "")
-            error = account_error(g.db, g.user, name, password, request.form.get("confirm", ""))
-            if error is None:
-                g.db.execute(
-                    "UPDATE users SET name = ?, pw_hash = ?, must_change = 0 WHERE id = ?",
-                    (name, generate_password_hash(password), g.user["id"]),
-                )
-                g.db.commit()
-                flash("Saved. That is your login from now on.")
-                return redirect(url_for("home"))
-            flash(error)
-        return render_template("account.html")
 
     def render_home(chosen, status=200):
         slots = load_slots(g.user["id"])
@@ -362,7 +308,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
     @commish_only
     def commish():
         members = g.db.execute(
-            "SELECT u.id, u.name, u.must_change, u.unlocked, p.user_id IS NOT NULL AS submitted "
+            "SELECT u.id, u.name, u.unlocked, p.user_id IS NOT NULL AS submitted "
             "FROM users u LEFT JOIN picks p ON p.user_id = u.id ORDER BY u.name"
         ).fetchall()
         return render_template("commish.html", members=members)
@@ -382,18 +328,6 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         flash(f"{member['name']} can change their team once, then it locks again.")
         return redirect(url_for("commish"))
 
-    @app.post("/commish/reset/<int:user_id>")
-    @commish_only
-    def commish_reset(user_id):
-        member = member_or_404(user_id)
-        g.db.execute(
-            "UPDATE users SET pw_hash = ?, must_change = 1 WHERE id = ?",
-            (starter_hash(member["name"]), user_id),
-        )
-        g.db.commit()
-        flash(f"{member['name']}'s password is their name again until they log in.")
-        return redirect(url_for("commish"))
-
     @app.post("/commish/add")
     @commish_only
     def commish_add():
@@ -403,7 +337,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         else:
             add_user(g.db, name)
             g.db.commit()
-            flash(f"{name} can log in with their name as the password.")
+            flash(f"{name} can log in with their name.")
         return redirect(url_for("commish"))
 
     return app
@@ -413,6 +347,7 @@ def init_command(args):
     pool = espn.build_pool(args.date)
     if not pool["games"]:
         raise SystemExit(f"ESPN lists no NFL games on {args.date}; pass --date YYYYMMDD.")
+    espn.add_projections(pool)
     POOL_PATH.write_text(json.dumps(pool, indent=1), encoding="utf-8")
 
     teams_config = configparser.RawConfigParser(strict=False)
@@ -432,6 +367,16 @@ def init_command(args):
         print(f"  {game['short']}  kickoff {game['kickoff']}")
     print(f"Players loaded: {len(pool['players'])}")
     print(f"Accounts ({len(members)}): {', '.join(members)}; commish: {args.commish}")
+
+
+def projections_command(args):
+    if not POOL_PATH.exists():
+        raise SystemExit("No player pool yet. Run: python pickem.py init")
+    pool = json.loads(POOL_PATH.read_text(encoding="utf-8"))
+    week = espn.add_projections(pool)
+    POOL_PATH.write_text(json.dumps(pool, indent=1), encoding="utf-8")
+    ranked = sum(1 for player in pool["players"] if player["proj"] is not None)
+    print(f"Week {week} projections set for {ranked} of {len(pool['players'])} players. Restart serve to show them.")
 
 
 def serve_command(args):
@@ -458,6 +403,8 @@ def main():
     init.add_argument("--teams-config", default=str(ROOT / "teams.ini"), help="file whose [sections] are the people")
     init.add_argument("--commish", default="Shane", help="account that can reopen teams")
     init.set_defaults(run=init_command)
+    projections = commands.add_parser("projections", help="refresh ESPN's projected points in the player pool")
+    projections.set_defaults(run=projections_command)
     serve = commands.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8080, type=int)

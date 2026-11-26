@@ -44,7 +44,7 @@
     <a href="{{ url_for('home') }}">My team</a>
     <a href="{{ url_for('teams') }}">Everyone</a>
     {% if user['is_commish'] %}<a href="{{ url_for('commish') }}">Commish</a>{% endif %}
-    <a href="{{ url_for('account') }}">{{ user['name'] }}</a>
+    <span>{{ user['name'] }}</span>
     <form method="post" action="{{ url_for('logout') }}">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button>Log out</button>

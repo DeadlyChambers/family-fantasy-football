@@ -1,15 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Log in</h2>
+<h2>Who are you?</h2>
 <div class="card">
   <form method="post">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <label for="name">Your name</label>
-    <input id="name" name="name" autocomplete="username" autocapitalize="words" required>
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <button class="primary">Log in</button>
+    <input id="name" name="name" maxlength="30" autocomplete="off" autocapitalize="words" autofocus required>
+    <button class="primary">Go to my team</button>
   </form>
-  <p class="muted">First time here? Type your name in both boxes: your first password is your name, and you choose your own right after. A new name starts a new team.</p>
+  <p class="muted">Type the same name each time to get back to your team. A new name starts a new team.</p>
 </div>
 {% endblock %}

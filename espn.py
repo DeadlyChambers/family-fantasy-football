@@ -11,6 +11,13 @@ import urllib.request
 
 BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/"
 
+FANTASY_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+# ESPN's standard full-PPR scoring. A private league's own scoring needs that league's login.
+FANTASY_SCORING = "leaguedefaults/3"
+FANTASY_SLOTS = [0, 2, 4, 6, 16, 17]  # QB, RB, WR, TE, D/ST, K
+PROJECTED = 1  # statSourceId; 0 is actual
+ONE_WEEK = 1  # statSplitTypeId; 0 is the whole season
+
 ROSTER_POSITIONS = {"QB": "QB", "RB": "RB", "FB": "RB", "WR": "WR", "TE": "TE", "PK": "K"}
 ROSTER_GROUPS = ("offense", "specialTeam")
 
@@ -92,6 +99,55 @@ def build_pool(date, fetch=fetch_json):
                 {"id": defense_id(team["abbr"]), "name": team["name"], "pos": "DEF", "team": team["abbr"]}
             )
     return {"date": date, "games": games, "players": players}
+
+
+def fetch_fantasy_json(path, filters=None):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if filters:
+        headers["x-fantasy-filter"] = json.dumps(filters)
+    request = urllib.request.Request(FANTASY_URL + path, headers=headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+
+def parse_projections(payload, week, abbr_by_team_id):
+    """Projected points for one week, keyed like the pool: athlete id, or DEF-<abbr> for a D/ST."""
+    projections = {}
+    for entry in payload.get("players", []):
+        player = entry["player"]
+        for stat in player.get("stats", []):
+            if (stat.get("statSourceId"), stat.get("statSplitTypeId"), stat.get("scoringPeriodId")) != (
+                PROJECTED,
+                ONE_WEEK,
+                week,
+            ):
+                continue
+            abbr = abbr_by_team_id.get(str(player.get("proTeamId")))
+            player_id = defense_id(abbr) if entry["id"] < 0 and abbr else str(entry["id"])
+            projections[player_id] = round(stat.get("appliedTotal", 0), 1)
+    return projections
+
+
+def add_projections(pool, fetch=fetch_fantasy_json):
+    """Set each pool player's "proj" to ESPN's projection for the current week; None when ESPN has none."""
+    year, month = int(pool["date"][:4]), int(pool["date"][4:6])
+    season = year if month >= 3 else year - 1
+    week = fetch(f"{season}?view=kona_game_state")["currentScoringPeriod"]["id"]
+    teams = {team["id"]: team["abbr"] for game in pool["games"] for team in game["teams"]}
+    filters = {
+        "players": {
+            "filterSlotIds": {"value": FANTASY_SLOTS},
+            "filterProTeamIds": {"value": [int(team_id) for team_id in teams]},
+            "filterStatsForCurrentSeasonScoringPeriodId": {"value": [week]},
+            "limit": 100 * len(teams),
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        }
+    }
+    payload = fetch(f"{season}/segments/0/{FANTASY_SCORING}?view=kona_player_info", filters)
+    projections = parse_projections(payload, week, teams)
+    for player in pool["players"]:
+        player["proj"] = projections.get(player["id"])
+    return week
 
 
 def _number(value):
