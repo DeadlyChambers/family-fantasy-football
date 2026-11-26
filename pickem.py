@@ -45,6 +45,7 @@ SLOTS = (
 )
 FLEX_POSITIONS = ("RB", "WR", "TE")
 SCORE_TTL_SECONDS = 60
+CHANGE_SHOWN_SECONDS = 300
 MAX_NAME_LENGTH = 30
 MAX_TIEBREAK_TOTAL = 200
 OVER_UNDER_SIDES = ("over", "under")
@@ -237,13 +238,14 @@ def tiebreak_rank(tiebreak, final):
     return (0 if tiebreak["winner"] == final["winner"] else 1, abs(tiebreak["total"] - actual))
 
 
-def roster_view(slots, players, points):
+def roster_view(slots, players, points, changes):
     rows = [
         {
             "slot": slot,
             "picked": slot in slots,
             "player": players.get(slots.get(slot)),
             "points": points.get(slots.get(slot), 0),
+            "change": changes.get(slots.get(slot)),
         }
         for slot, _ in SLOTS
     ]
@@ -261,6 +263,8 @@ class LiveScores:
         self._results = {}
         self._asked_at = {}
         self._failed = set()
+        self._answered_at = None
+        self._changes = {}
 
     def snapshot(self):
         """Return (points by player id, status text by game id, True when scores are stale, result by game id)."""
@@ -276,6 +280,17 @@ class LiveScores:
                 details[game_id] = result["detail"]
             return points, details, bool(self._failed), dict(self._results)
 
+    def updates(self):
+        """Return (when ESPN last answered, points gained or lost by player id in the last CHANGE_SHOWN_SECONDS)."""
+        with self._lock:
+            now = self._now()
+            recent = {
+                player_id: change
+                for player_id, (change, at) in self._changes.items()
+                if (now - at).total_seconds() < CHANGE_SHOWN_SECONDS
+            }
+            return self._answered_at, recent
+
     def _is_due(self, game_id, now):
         result = self._results.get(game_id)
         if result and result["state"] == "post":
@@ -286,12 +301,22 @@ class LiveScores:
     def _refresh(self, game_id, now):
         self._asked_at[game_id] = now
         try:
-            self._results[game_id] = espn.parse_fantasy_points(self._fetch(f"summary?event={game_id}"))
-            self._failed.discard(game_id)
+            result = espn.parse_fantasy_points(self._fetch(f"summary?event={game_id}"))
         except (OSError, ValueError, KeyError):
             # The last good scores stay on the page and the leaderboard says they are delayed.
             log.exception("ESPN score refresh failed for game %s", game_id)
             self._failed.add(game_id)
+            return
+        before = self._results.get(game_id)
+        # The first answer after a start has nothing to compare with, so it marks no changes.
+        if before:
+            for player_id, points in result["points"].items():
+                change = round(points - before["points"].get(player_id, 0), 2)
+                if change:
+                    self._changes[player_id] = (change, now)
+        self._results[game_id] = result
+        self._answered_at = now
+        self._failed.discard(game_id)
 
 
 def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, version=UNVERSIONED):
@@ -464,7 +489,8 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
         slots = load_slots(g.user["id"])
         started = revealed()
         points, _, _, results = live.snapshot() if started else ({}, {}, False, {})
-        rows, total = roster_view(slots, players, points) if slots else ([], 0)
+        scores_at, changes = live.updates()
+        rows, total = roster_view(slots, players, points, changes) if slots else ([], 0)
         tiebreak = g.db.execute("SELECT * FROM tiebreakers WHERE user_id = ?", (g.user["id"],)).fetchone()
         game_picks = load_game_picks(g.user["id"])
         page = render_template(
@@ -476,6 +502,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             rows=rows,
             total=total,
             started=started,
+            scores_at=scores_at.isoformat() if scores_at else None,
             edits=load_edits().get(g.user["id"], []),
             flex_choices=late_flex_choices(slots),
             tiebreak=tiebreak,
@@ -587,6 +614,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             waiting = [{"name": u["name"], "submitted": u["id"] in picks} for u in users]
             return render_template("teams.html", revealed=False, waiting=waiting)
         points, details, delayed, results = live.snapshot()
+        scores_at, changes = live.updates()
         final = results.get(last_game["id"], {})
         decided = final.get("state") == "post"
         # Other people's tiebreakers stay hidden while they can still be changed.
@@ -602,7 +630,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
         entries = []
         for member in users:
             slots = picks.get(member["id"])
-            rows, total = roster_view(slots, players, points) if slots else ([], 0)
+            rows, total = roster_view(slots, players, points, changes) if slots else ([], 0)
             notes = edits.get(member["id"], [])
             if member["id"] != g.user["id"]:
                 rows = [
@@ -646,6 +674,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, 
             entries=entries,
             games=games,
             delayed=delayed,
+            scores_at=scores_at.isoformat() if scores_at else None,
             last_game=last_game,
             pickem=pickem,
             picks_shown=not picks_open(),

@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import subprocess
@@ -523,6 +524,31 @@ def test_other_peoples_players_stay_hidden_until_their_game_kicks_off(tmp_path, 
 
     clock["now"] = AFTER_LAST_GAME
     assert "added Bo Backup at FLEX, replacing Tad Flexer." in page(papaw, "/teams")
+
+
+def test_a_players_new_points_and_the_time_of_the_scores_are_shown(tmp_path, clock):
+    later = copy.deepcopy(SUMMARY)
+    later["boxscore"]["players"][0]["statistics"][4]["athletes"] = [stat_line("k1", ["2/2", "9"])]
+    feed = {"summary": SUMMARY}
+    application = pickem.create_app(
+        tmp_path / "pickem.db", POOL, now=lambda: clock["now"], fetch=lambda path: feed["summary"], secret_key="test"
+    )
+    jill, papaw = join(application, "Jill"), join(application, "Papaw")
+    post(jill, "/picks", **ROSTER)
+
+    clock["now"] = AFTER_KICKOFF
+    first = page(jill, "/")
+    assert 'Scores updated <time datetime="2026-11-26T18:30:00+00:00"' in first
+    assert 'class="gain"' not in first  # the first scores have nothing to compare with
+
+    feed["summary"] = later
+    clock["now"] = datetime(2026, 11, 26, 18, 32, tzinfo=timezone.utc)
+    for seen in (page(jill, "/"), page(papaw, "/teams")):
+        assert '<span class="gain">+3.00</span> 9.00' in seen
+        assert 'Scores updated <time datetime="2026-11-26T18:32:00+00:00"' in seen
+
+    clock["now"] = datetime(2026, 11, 26, 18, 40, tzinfo=timezone.utc)
+    assert 'class="gain"' not in page(jill, "/")
 
 
 def test_a_refused_save_says_why(app, clock):

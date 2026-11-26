@@ -19,6 +19,7 @@
   {% endfor %}
 </ul>
 {% if delayed %}<p class="flash">ESPN is not answering right now, so some scores are behind. This page retries every minute.</p>{% endif %}
+{% include "_scores_at.html" %}
 {% set started = true %}
 {% for entry in entries %}
 <div class="card">

@@ -3,7 +3,7 @@
   <tr>
     <td class="slot">{{ row['slot'] }}</td>
     <td>{% if row['player'] %}{{ row['player']['name'] }} <span class="muted">{{ row['player']['team'] }}</span>{% else %}<span class="muted">{% if row['hidden'] %}Hidden until that game kicks off{% elif row['picked'] %}Player no longer listed{% else %}Not picked{% endif %}</span>{% endif %}</td>
-    {% if started %}<td class="num">{{ "%.2f"|format(row['points']) }}</td>{% endif %}
+    {% if started %}<td class="num">{% if row['change'] %}<span class="{{ 'gain' if row['change'] > 0 else 'loss' }}">{{ "%+.2f"|format(row['change']) }}</span> {% endif %}{{ "%.2f"|format(row['points']) }}</td>{% endif %}
   </tr>
   {% endfor %}
 </table>
