@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block head %}{% if revealed %}<meta http-equiv="refresh" content="60">{% endif %}{% endblock %}
+{% block content %}
+{% if not revealed %}
+<h2>Everyone</h2>
+<div class="card">
+  <p class="muted">Teams stay hidden until first kickoff, <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>.</p>
+  <table>
+    {% for person in waiting %}
+    <tr><td>{{ person['name'] }}</td><td class="num">{% if person['submitted'] %}Submitted{% else %}Not yet{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<h2>Leaderboard</h2>
+<ul class="games">
+  {% for game in games %}
+  <li>{{ game['short'] }} · {% if game['detail'] %}{{ game['detail'] }}{% else %}<time datetime="{{ game['kickoff'] }}">{{ game['kickoff'] }}</time>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% if delayed %}<p class="flash">ESPN is not answering right now, so some scores are behind. This page retries every minute.</p>{% endif %}
+{% set started = true %}
+{% for entry in entries %}
+<div class="card">
+  <div class="team-head">
+    <h3>{{ loop.index }}. {{ entry['name'] }}</h3>
+    <span class="total">{{ "%.2f"|format(entry['total']) }}</span>
+  </div>
+  {% if entry['rows'] %}
+  {% set rows = entry['rows'] %}
+  {% include "_roster.html" %}
+  {% else %}
+  <p class="muted">No team submitted.</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

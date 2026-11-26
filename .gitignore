@@ -127,3 +127,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Thanksgiving pick'em runtime state
+pickem.db
+pickem_pool.json
+.pickem_secret
