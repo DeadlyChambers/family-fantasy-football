@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Log in</h2>
+<div class="card">
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label for="name">Your name</label>
+    <input id="name" name="name" autocomplete="username" autocapitalize="words" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button class="primary">Log in</button>
+  </form>
+  <p class="muted">First time here? Your password is your name. You choose your own right after.</p>
+</div>
+{% endblock %}

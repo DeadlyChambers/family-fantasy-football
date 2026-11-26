@@ -1,0 +1,9 @@
+<table>
+  {% for row in rows %}
+  <tr>
+    <td class="slot">{{ row['slot'] }}</td>
+    <td>{% if row['player'] %}{{ row['player']['name'] }} <span class="muted">{{ row['player']['team'] }}</span>{% else %}<span class="muted">Player no longer listed</span>{% endif %}</td>
+    {% if started %}<td class="num">{{ "%.2f"|format(row['points']) }}</td>{% endif %}
+  </tr>
+  {% endfor %}
+</table>
