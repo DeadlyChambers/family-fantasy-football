@@ -172,6 +172,14 @@ def defense_points(own_stats, opponent_stats, points_allowed):
     return round(earned + bonus, 2)
 
 
+def parse_over_under(summary):
+    """The total-points line from the first sportsbook ESPN lists for the game, or None."""
+    for entry in summary.get("pickcenter") or []:
+        if entry.get("overUnder") is not None:
+            return float(entry["overUnder"])
+    return None
+
+
 def parse_fantasy_points(summary):
     """Return {"state", "detail", "points", "scores", "winner"} for one game.
 

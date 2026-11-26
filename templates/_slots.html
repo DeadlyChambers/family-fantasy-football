@@ -1,0 +1,9 @@
+{% for slot, position in slots %}
+<label for="{{ slot }}">{{ slot }}{% if position == 'FLEX' %} (RB, WR or TE){% endif %}</label>
+<select id="{{ slot }}" name="{{ slot }}"{% if not optional %} required{% endif %}>
+  <option value="">{% if optional %}Not picked{% else %}Choose a {{ position }}{% endif %}</option>
+  {% for player in options[position] %}
+  <option value="{{ player['id'] }}"{% if chosen.get(slot) == player['id'] %} selected{% endif %}>{{ player['name'] }} ({{ player['team'] }}{% if position == 'FLEX' %} {{ player['pos'] }}{% endif %}){% if player.get('proj') is not none %} {{ "%.1f"|format(player['proj']) }}{% endif %}</option>
+  {% endfor %}
+</select>
+{% endfor %}

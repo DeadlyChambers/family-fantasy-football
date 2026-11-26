@@ -32,6 +32,8 @@
   {% else %}
   <p class="muted">No team submitted.</p>
   {% endif %}
+  {% set edits = entry['edits'] %}
+  {% include "_edits.html" %}
   {% if entry['tiebreak'] %}<p class="muted">Tiebreaker: {{ entry['tiebreak']['winner'] }} wins {{ last_game['short'] }}, total score {{ entry['tiebreak']['total'] }}</p>{% endif %}
 </div>
 {% endfor %}
@@ -41,11 +43,11 @@
   <p class="muted">Game picks show at <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>
   {% elif pickem %}
   <table>
-    <tr><th></th>{% for game in games %}<th>{{ game['short'] }}</th>{% endfor %}<th class="num">Right</th></tr>
+    <tr><th></th>{% for game in games %}<th>{{ game['short'] }}{% if game['over_under'] %}<br><span class="muted">O/U {{ game['over_under'] }}</span>{% endif %}</th>{% endfor %}<th class="num">Right</th></tr>
     {% for entry in pickem %}
     <tr>
       <td>{{ entry['name'] }}</td>
-      {% for cell in entry['cells'] %}<td>{% if cell['pick'] %}{{ cell['pick'] }}{% if cell['right'] is not none %} {{ '✓' if cell['right'] else '✗' }}{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>{% endfor %}
+      {% for cell in entry['cells'] %}<td>{% if cell['pick'] %}{{ cell['pick'] }}{% if cell['right'] is not none %} {{ '✓' if cell['right'] else '✗' }}{% endif %}{% else %}<span class="muted">-</span>{% endif %}{% if cell['line'] %}<br>{% if cell['side'] %}{{ cell['side']|capitalize }}{% if cell['side_right'] is not none %} {{ '✓' if cell['side_right'] else '✗' }}{% endif %}{% else %}<span class="muted">-</span>{% endif %}{% endif %}</td>{% endfor %}
       <td class="num">{{ entry['right'] }}</td>
     </tr>
     {% endfor %}

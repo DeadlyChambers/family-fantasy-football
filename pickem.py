@@ -1,7 +1,8 @@
 """Thanksgiving pick'em web app.
 
 One roster per person, changeable until the first kickoff of the day; after
-that only the commish can reopen it. The Everyone page hides rosters until
+that only the commish can reopen it, change it or delete the team, and each
+commish change is listed on the team. The Everyone page hides rosters until
 that kickoff, then shows every roster with live fantasy points. Each person
 also guesses the last game's winner and total score, which orders equal totals.
 Picking each game's winner is a separate contest with its own standings.
@@ -45,6 +46,7 @@ FLEX_POSITIONS = ("RB", "WR", "TE")
 SCORE_TTL_SECONDS = 60
 MAX_NAME_LENGTH = 30
 MAX_TIEBREAK_TOTAL = 200
+OVER_UNDER_SIDES = ("over", "under")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +69,14 @@ CREATE TABLE IF NOT EXISTS game_picks (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     picks TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS roster_edits (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    edited_at TEXT NOT NULL,
+    note TEXT NOT NULL
+);
 """
+USER_TABLES = ("picks", "tiebreakers", "game_picks", "roster_edits")
 
 log = logging.getLogger(__name__)
 
@@ -105,16 +114,40 @@ def options_by_position(pool):
     }
 
 
-def validate_picks(form, players):
+def validate_picks(form, players, allow_empty=False):
     slots = {}
     for slot, position in SLOTS:
-        player = players.get(form.get(slot, ""))
+        choice = form.get(slot, "")
+        if allow_empty and not choice:
+            continue
+        player = players.get(choice)
         if player is None or player["pos"] not in eligible(position):
             return None, f"Choose a player for {slot}."
         if player["id"] in slots.values():
             return None, f"{player['name']} is on your team twice."
         slots[slot] = player["id"]
     return slots, None
+
+
+def edit_notes(before, after, players):
+    """One phrase per roster spot that differs, such as "added X at QB, replacing Y"."""
+
+    def name(player_id):
+        player = players.get(player_id)
+        return player["name"] if player else "a player no longer listed"
+
+    notes = []
+    for slot, _ in SLOTS:
+        old, new = before.get(slot), after.get(slot)
+        if old == new:
+            continue
+        if new is None:
+            notes.append(f"removed {name(old)} from {slot}")
+        elif old is None:
+            notes.append(f"added {name(new)} at {slot}")
+        else:
+            notes.append(f"added {name(new)} at {slot}, replacing {name(old)}")
+    return notes
 
 
 def validate_tiebreaker(form, game):
@@ -136,18 +169,37 @@ def validate_game_picks(form, games):
         if pick not in [team["abbr"] for team in game["teams"]]:
             return None, f"Choose a team playing in {game['short']}."
         picks[game["id"]] = pick
+    for game in games:
+        side = form.get(f"ou-{game['id']}", "")
+        if not side:
+            continue
+        if side not in OVER_UNDER_SIDES or game.get("over_under") is None:
+            return None, f"Choose over or under for {game['short']}."
+        picks[f"ou-{game['id']}"] = side
     return picks, None
 
 
 def game_pick_view(picks, games, results):
-    """Return (one cell per game, number right); a cell's "right" stays None until its game is final."""
+    """Return (one cell per game, number right); "right" and "side_right" stay None until the game is final.
+
+    A final total equal to the line makes neither side right.
+    """
     cells = []
     for game in games:
         pick = picks.get(game["id"])
+        side = picks.get(f"ou-{game['id']}")
+        line = game.get("over_under")
         result = results.get(game["id"], {})
-        right = pick == result["winner"] if pick and result.get("state") == "post" else None
-        cells.append({"short": game["short"], "pick": pick, "right": right})
-    return cells, sum(1 for cell in cells if cell["right"])
+        final = result.get("state") == "post"
+        right = pick == result["winner"] if pick and final else None
+        side_right = None
+        if side and line is not None and final:
+            total = sum(result["scores"].values())
+            side_right = total > line if side == "over" else total < line
+        cells.append(
+            {"short": game["short"], "pick": pick, "right": right, "line": line, "side": side, "side_right": side_right}
+        )
+    return cells, sum(1 for cell in cells for key in ("right", "side_right") if cell[key])
 
 
 def tiebreak_rank(tiebreak, final):
@@ -255,6 +307,12 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         row = g.db.execute("SELECT slots FROM picks WHERE user_id = ?", (user_id,)).fetchone()
         return json.loads(row["slots"]) if row else None
 
+    def load_edits():
+        edits = {}
+        for row in g.db.execute("SELECT user_id, edited_at, note FROM roster_edits ORDER BY id"):
+            edits.setdefault(row["user_id"], []).append(row)
+        return edits
+
     def can_edit():
         return bool(g.user["unlocked"]) or not revealed()
 
@@ -351,6 +409,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             rows=rows,
             total=total,
             started=started,
+            edits=load_edits().get(g.user["id"], []),
             flex_choices=late_flex_choices(slots),
             tiebreak=tiebreak,
             tiebreak_open=tiebreak_open(),
@@ -463,6 +522,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             if tiebreak_open()
             else {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
         )
+        edits = load_edits()
         entries = []
         for member in users:
             slots = picks.get(member["id"])
@@ -473,13 +533,19 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
                     "name": member["name"],
                     "rows": rows,
                     "total": total,
+                    "edits": edits.get(member["id"], []),
                     "tiebreak": tiebreak,
                     "rank": tiebreak_rank(tiebreak, final) if decided else (0, 0),
                 }
             )
         entries.sort(key=lambda entry: (-entry["total"], entry["rank"], entry["name"].lower()))
         games = [
-            {"short": game["short"], "kickoff": game["kickoff"], "detail": details.get(game["id"])}
+            {
+                "short": game["short"],
+                "kickoff": game["kickoff"],
+                "detail": details.get(game["id"]),
+                "over_under": game.get("over_under"),
+            }
             for game in pool["games"]
         ]
         # Other people's game picks stay hidden while they can still be changed.
@@ -488,7 +554,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             saved = g.db.execute("SELECT u.name, p.picks FROM game_picks p JOIN users u ON u.id = p.user_id")
             for row in saved:
                 cells, right = game_pick_view(json.loads(row["picks"]), pool["games"], results)
-                if any(cell["pick"] for cell in cells):
+                if any(cell["pick"] or cell["side"] for cell in cells):
                     pickem.append({"name": row["name"], "cells": cells, "right": right})
             pickem.sort(key=lambda entry: (-entry["right"], entry["name"].lower()))
         return render_template(
@@ -509,7 +575,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             "SELECT u.id, u.name, u.unlocked, p.user_id IS NOT NULL AS submitted "
             "FROM users u LEFT JOIN picks p ON p.user_id = u.id ORDER BY u.name"
         ).fetchall()
-        return render_template("commish.html", members=members)
+        return render_template("commish.html", members=members, revealed=revealed())
 
     def member_or_404(user_id):
         member = g.db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -536,6 +602,63 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             add_user(g.db, name)
             g.db.commit()
             flash(f"{name} can log in with their name.")
+        return redirect(url_for("commish"))
+
+    @app.route("/commish/team/<int:user_id>", methods=["GET", "POST"])
+    @commish_only
+    def commish_team(user_id):
+        member = member_or_404(user_id)
+        if not revealed():
+            flash("Teams stay hidden until they lock. Until then each person changes their own.")
+            return redirect(url_for("commish"))
+        before = load_slots(user_id) or {}
+        chosen, status = before, 200
+        if request.method == "POST":
+            after, error = validate_picks(request.form, players, allow_empty=True)
+            if error:
+                flash(error)
+                chosen, status = request.form, 400
+            else:
+                notes = edit_notes(before, after, players)
+                stamp = now().isoformat()
+                if notes:
+                    g.db.execute(
+                        "INSERT INTO picks (user_id, slots, submitted_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET slots = excluded.slots",
+                        (user_id, json.dumps(after), stamp),
+                    )
+                    g.db.executemany(
+                        "INSERT INTO roster_edits (user_id, edited_at, note) VALUES (?, ?, ?)",
+                        [(user_id, stamp, note) for note in notes],
+                    )
+                    g.db.commit()
+                flash(f"{member['name']}'s team is changed." if notes else "Nothing was changed.")
+                return redirect(url_for("commish_team", user_id=user_id))
+        page = render_template(
+            "commish_team.html",
+            member=member,
+            chosen=chosen,
+            slots=SLOTS,
+            options=options,
+            edits=load_edits().get(user_id, []),
+        )
+        return page, status
+
+    @app.post("/commish/delete/<int:user_id>")
+    @commish_only
+    def commish_delete(user_id):
+        member = member_or_404(user_id)
+        if member["id"] == g.user["id"]:
+            flash("You cannot delete your own team.")
+        elif request.form.get("name") != member["name"]:
+            # SQLite hands a deleted last row's id to the next new person, so an old page can name the wrong one.
+            flash("That list was out of date, so nothing was deleted. Try again.")
+        else:
+            for table in USER_TABLES:
+                g.db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+            g.db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            g.db.commit()
+            flash(f"{member['name']} and their team are deleted.")
         return redirect(url_for("commish"))
 
     return app
@@ -592,6 +715,21 @@ def lock_command(args):
     print(f"{args.key} set to {args.at}. Restart serve to apply it.")
 
 
+def lines_command(args):
+    if not POOL_PATH.exists():
+        raise SystemExit("No player pool yet. Run: python pickem.py init")
+    pool = json.loads(POOL_PATH.read_text(encoding="utf-8"))
+    for game in pool["games"]:
+        # A line already set is kept, so it cannot move under picks already made.
+        if game.get("over_under") is None:
+            line = espn.parse_over_under(espn.fetch_json(f"summary?event={game['id']}"))
+            if line is not None:
+                game["over_under"] = line
+        print(f"  {game['short']}  over/under {game.get('over_under', 'not listed')}")
+    POOL_PATH.write_text(json.dumps(pool, indent=1), encoding="utf-8")
+    print("Restart serve to show them.")
+
+
 def serve_command(args):
     from waitress import serve
 
@@ -624,6 +762,8 @@ def main():
     lock_picks = commands.add_parser("lock-picks", help="lock and show the game picks at a set time instead of with the teams")
     lock_picks.add_argument("at", help="UTC time such as 2026-11-26T19:00Z")
     lock_picks.set_defaults(run=lock_command, key="picks_lock_at")
+    lines = commands.add_parser("lines", help="load each game's over/under line from ESPN for the game pick'em")
+    lines.set_defaults(run=lines_command)
     serve = commands.add_parser("serve", help="run the web app")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", default=8080, type=int)

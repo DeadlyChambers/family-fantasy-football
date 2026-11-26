@@ -11,15 +11,7 @@
   {% endif %}
   <form method="post" action="{{ url_for('submit_picks') }}"{% if started %} onsubmit="return confirm('Submit and lock your team?');"{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-    {% for slot, position in slots %}
-    <label for="{{ slot }}">{{ slot }}{% if position == 'FLEX' %} (RB, WR or TE){% endif %}</label>
-    <select id="{{ slot }}" name="{{ slot }}" required>
-      <option value="">Choose a {{ position }}</option>
-      {% for player in options[position] %}
-      <option value="{{ player['id'] }}"{% if chosen.get(slot) == player['id'] %} selected{% endif %}>{{ player['name'] }} ({{ player['team'] }}{% if position == 'FLEX' %} {{ player['pos'] }}{% endif %}){% if player.get('proj') is not none %} {{ "%.1f"|format(player['proj']) }}{% endif %}</option>
-      {% endfor %}
-    </select>
-    {% endfor %}
+    {% include "_slots.html" %}
     <button class="primary">{% if started %}Submit and lock my team{% else %}Save my team{% endif %}</button>
   </form>
 </div>
@@ -30,6 +22,7 @@
     {% if started %}<span class="total">{{ "%.2f"|format(total) }}</span>{% endif %}
   </div>
   {% include "_roster.html" %}
+  {% include "_edits.html" %}
   <p class="muted">{% if started %}Points update about once a minute. See <a href="{{ url_for('teams') }}">everyone's teams</a>.{% endif %}</p>
 </div>
 {% else %}
@@ -85,7 +78,7 @@
 <h2>Game pick'em</h2>
 <div class="card">
   {% if picks_form %}
-  <p class="muted">Pick the winner of each game. This is its own contest, scored apart from your fantasy team: the most right picks wins. You can change these until <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>
+  <p class="muted">Pick the winner of each game, and whether both teams' points added together go over or under the line. This is its own contest, scored apart from your fantasy team: the most right picks wins. You can change these until <time datetime="{{ picks_lock_at }}">{{ picks_lock_at }}</time>.</p>
   <form method="post" action="{{ url_for('submit_game_picks') }}">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     {% for game in games %}
@@ -96,6 +89,15 @@
       <option value="{{ team['abbr'] }}"{% if game_picks.get(game['id']) == team['abbr'] %} selected{% endif %}>{{ team['name'] }}</option>
       {% endfor %}
     </select>
+    {% if game['over_under'] %}
+    <label for="ou-{{ game['id'] }}">{{ game['short'] }} total points: over or under {{ game['over_under'] }}?</label>
+    <select id="ou-{{ game['id'] }}" name="ou-{{ game['id'] }}">
+      <option value="">No pick</option>
+      {% for side in ('over', 'under') %}
+      <option value="{{ side }}"{% if game_picks.get('ou-' ~ game['id']) == side %} selected{% endif %}>{{ side|capitalize }} {{ game['over_under'] }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     {% endfor %}
     <button class="primary">Save my picks</button>
   </form>
@@ -105,6 +107,7 @@
     <tr>
       <td class="slot">{{ cell['short'] }}</td>
       <td>{% if cell['pick'] %}{{ cell['pick'] }}{% if cell['right'] is not none %} {{ '✓' if cell['right'] else '✗' }}{% endif %}{% else %}<span class="muted">No pick</span>{% endif %}</td>
+      {% if cell['line'] %}<td>{% if cell['side'] %}{{ cell['side']|capitalize }} {{ cell['line'] }}{% if cell['side_right'] is not none %} {{ '✓' if cell['side_right'] else '✗' }}{% endif %}{% else %}<span class="muted">No over/under pick</span>{% endif %}</td>{% endif %}
     </tr>
     {% endfor %}
   </table>

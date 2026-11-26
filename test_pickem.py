@@ -435,6 +435,77 @@ def test_game_picks_are_scored_apart_from_fantasy_and_hidden_until_they_lock(tmp
     assert "Zed" not in standings
 
 
+def test_over_under_picks_count_in_the_game_pickem(tmp_path, clock):
+    lined = [{**game, "over_under": 45.5} if game["id"] == "g2" else game for game in TWO_GAMES["games"]]
+    application = pickem.create_app(
+        tmp_path / "pickem.db",
+        {**TWO_GAMES, "games": lined},
+        now=lambda: clock["now"],
+        fetch=lambda path: FINAL if "g2" in path else SUMMARY,
+        secret_key="test",
+    )
+    amy, bob = join(application, "Amy"), join(application, "Bob")
+
+    assert "Choose over or under for KC @ BUF" in post(amy, "/game-picks", **{"ou-g2": "push"}).get_data(as_text=True)
+    assert "Choose over or under for CHI @ DET" in post(amy, "/game-picks", **{"ou-g1": "over"}).get_data(as_text=True)
+    post(amy, "/game-picks", **{"pick-g2": "KC", "ou-g2": "over"})
+    post(bob, "/game-picks", **{"pick-g2": "KC", "ou-g2": "under"})
+
+    clock["now"] = AFTER_LAST_GAME  # BUF 28, KC 21: 49 points, over the 45.5 line
+    standings = page(amy, "/teams").split("Game pick'em")[1]
+    assert "O/U 45.5" in standings
+    assert "Over ✓" in standings and "Under ✗" in standings
+    assert standings.index("Amy") < standings.index("Bob")
+    assert "Over 45.5 ✓" in page(amy, "/")
+
+
+def test_the_over_under_line_comes_from_the_first_sportsbook_listed():
+    assert espn.parse_over_under({"pickcenter": [{"details": "BUF -3"}, {"overUnder": 45.5}]}) == 45.5
+    assert espn.parse_over_under({}) is None
+
+
+def test_the_commish_changes_a_locked_roster_and_the_change_is_called_out(app, clock):
+    jill, shane = join(app, "Jill"), join(app, "Shane")
+    post(jill, "/picks", **ROSTER)
+    jill_id = 2
+    changed = {**ROSTER, "QB": "q2", "K": ""}
+
+    early = post(shane, f"/commish/team/{jill_id}", **changed).get_data(as_text=True)
+    assert "Teams stay hidden until they lock" in early
+
+    clock["now"] = AFTER_KICKOFF
+    assert post(jill, f"/commish/team/{jill_id}", **changed).status_code == 403
+    assert post(shane, f"/commish/team/{jill_id}", **{**ROSTER, "RB2": "r1"}).status_code == 400
+    assert "Edited by commish" not in page(jill, "/")
+
+    post(shane, f"/commish/team/{jill_id}", **changed)
+
+    for seen in (page(jill, "/"), page(join(app, "Papaw"), "/teams")):
+        assert "Edited by commish at <time" in seen
+        assert "added Other Thrower at QB, replacing Quinn Passer." in seen
+        assert "removed Kip Kicker from K." in seen
+    assert "50.50" in page(jill, "/teams")  # 73.50 without q1's 17 and k1's 6; q2 has no points yet
+
+
+def test_the_commish_deletes_a_team_only_when_the_name_matches_the_id(app, clock):
+    jill, shane = join(app, "Jill"), join(app, "Shane")
+    post(jill, "/picks", **ROSTER)
+    shane_id, jill_id = 1, 2
+    clock["now"] = AFTER_KICKOFF
+
+    assert post(jill, f"/commish/delete/{jill_id}", name="Jill").status_code == 403
+    assert "nothing was deleted" in post(shane, f"/commish/delete/{jill_id}", name="Papaw").get_data(as_text=True)
+    assert "cannot delete your own" in post(shane, f"/commish/delete/{shane_id}", name="Shane").get_data(as_text=True)
+    assert "Quinn Passer" in page(shane, "/teams")
+
+    gone = post(shane, f"/commish/delete/{jill_id}", name="Jill").get_data(as_text=True)
+    assert "Jill and their team are deleted" in gone
+    board = page(shane, "/teams")
+    assert "Jill" not in board and "Quinn Passer" not in board
+    assert "Papaw" in board
+    assert "Log out" not in page(jill, "/")  # her session no longer opens a team
+
+
 def test_a_final_game_reports_its_score_and_winner():
     result = espn.parse_fantasy_points(FINAL)
 
