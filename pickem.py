@@ -262,7 +262,14 @@ def save_hall_year(path, record):
     draft.replace(path)
 
 
-def roster_view(slots, players, points, changes):
+def player_stats(results):
+    """The stat entries behind each player's points, by player id, across every game's result."""
+    return {
+        player_id: lines for result in results.values() for player_id, lines in result.get("stats", {}).items()
+    }
+
+
+def roster_view(slots, players, points, changes, stats):
     rows = [
         {
             "slot": slot,
@@ -270,6 +277,7 @@ def roster_view(slots, players, points, changes):
             "player": players.get(slots.get(slot)),
             "points": points.get(slots.get(slot), 0),
             "change": changes.get(slots.get(slot)),
+            "stats": stats.get(slots.get(slot), []),
         }
         for slot, _ in SLOTS
     ]
@@ -409,7 +417,7 @@ def create_app(
         """Ids of players whose game has not started; other people do not see these on a roster."""
         return {p["id"] for p in pool["players"] if now() < kickoff_by_team[p["team"]]}
 
-    def ranked_teams(points, changes, final, tiebreaks):
+    def ranked_teams(points, changes, stats, final, tiebreaks):
         """People who picked a roster, best first; equal totals fall to the tiebreaker once the last game is final."""
         decided = final.get("state") == "post"
         board = []
@@ -417,7 +425,7 @@ def create_app(
             slots = json.loads(row["slots"])
             if not has_roster(slots):
                 continue
-            rows, total = roster_view(slots, players, points, changes)
+            rows, total = roster_view(slots, players, points, changes, stats)
             tiebreak = tiebreaks.get(row["id"])
             board.append(
                 {
@@ -450,7 +458,7 @@ def create_app(
         if any(results.get(game["id"], {}).get("state") != "post" for game in pool["games"]):
             return None
         tiebreaks = {row["user_id"]: row for row in g.db.execute("SELECT * FROM tiebreakers")}
-        board = ranked_teams(points, {}, results[last_game["id"]], tiebreaks)
+        board = ranked_teams(points, {}, {}, results[last_game["id"]], tiebreaks)
         if not board:
             return None
         record = {
@@ -571,7 +579,7 @@ def create_app(
         started = revealed()
         points, _, _, results = live.snapshot() if started else ({}, {}, False, {})
         scores_at, changes = live.updates()
-        rows, total = roster_view(slots, players, points, changes) if slots else ([], 0)
+        rows, total = roster_view(slots, players, points, changes, player_stats(results)) if slots else ([], 0)
         tiebreak = g.db.execute("SELECT * FROM tiebreakers WHERE user_id = ?", (g.user["id"],)).fetchone()
         game_picks = load_game_picks(g.user["id"])
         page = render_template(
@@ -707,7 +715,7 @@ def create_app(
         # A late flex or a commish change can still pick from a game that has not started,
         # so other people's players from that game stay hidden until it kicks off.
         unseen = not_kicked_off()
-        entries = ranked_teams(points, changes, final, tiebreaks)
+        entries = ranked_teams(points, changes, player_stats(results), final, tiebreaks)
         for entry in entries:
             entry["edits"] = edits.get(entry["id"], [])
             if entry["id"] != g.user["id"]:

@@ -36,7 +36,25 @@ PLAYER_POINTS = {
     ("puntReturns", "puntReturnTouchdowns"): 6,
     ("kicking", "totalKickingPoints"): 1,
 }
+# The words shown beside each stat in PLAYER_POINTS; a label ending in "s" loses it for a count of one.
+STAT_LABELS = {
+    ("passing", "passingYards"): "pass yds",
+    ("passing", "passingTouchdowns"): "pass TD",
+    ("passing", "interceptions"): "INT",
+    ("rushing", "rushingYards"): "rush yds",
+    ("rushing", "rushingTouchdowns"): "rush TD",
+    ("receiving", "receptions"): "rec",
+    ("receiving", "receivingYards"): "rec yds",
+    ("receiving", "receivingTouchdowns"): "rec TD",
+    ("fumbles", "fumblesLost"): "fum lost",
+    ("kickReturns", "kickReturnTouchdowns"): "kick ret TD",
+    ("puntReturns", "puntReturnTouchdowns"): "punt ret TD",
+    ("kicking", "totalKickingPoints"): "kicking pts",
+}
+# Made/attempted strings ESPN lists beside a kicker's points, shown in place of the bare point total.
+KICK_ATTEMPTS = (("fieldGoalsMade/fieldGoalAttempts", "FG"), ("extraPointsMade/extraPointAttempts", "XP"))
 DEFENSE_POINTS = {"sack": 1, "interception": 2, "fumble_recovery": 2, "touchdown": 6}
+DEFENSE_LABELS = {"sack": "sacks", "interception": "INT", "fumble_recovery": "fum rec", "touchdown": "def TD"}
 # (most points allowed, bonus), checked in order; anything above the last tier gets the floor.
 POINTS_ALLOWED_TIERS = ((0, 10), (6, 7), (13, 4), (20, 1), (27, 0), (34, -1))
 POINTS_ALLOWED_FLOOR = -4
@@ -157,19 +175,48 @@ def _number(value):
         return 0.0
 
 
-def defense_points(own_stats, opponent_stats, points_allowed):
-    sacks = _number(str(opponent_stats.get("sacksYardsLost", "0")).split("-")[0])
-    earned = (
-        sacks * DEFENSE_POINTS["sack"]
-        + _number(opponent_stats.get("interceptions")) * DEFENSE_POINTS["interception"]
-        + _number(opponent_stats.get("fumblesLost")) * DEFENSE_POINTS["fumble_recovery"]
-        + _number(own_stats.get("defensiveTouchdowns")) * DEFENSE_POINTS["touchdown"]
-    )
+def _counted(amount, label):
+    return f"{amount:g} {label[:-1] if amount == 1 and label.endswith('s') else label}"
+
+
+def stat_lines(category, values):
+    """Each scoring stat of one box-score line as {"text", "points"}, in ESPN's order."""
+    lines = []
+    for key, value in values.items():
+        rate = PLAYER_POINTS.get((category, key))
+        amount = _number(value)
+        if not rate or not amount:
+            continue
+        text = _counted(amount, STAT_LABELS[(category, key)])
+        if key == "totalKickingPoints":
+            text = ", ".join(f"{label} {values[made]}" for made, label in KICK_ATTEMPTS if made in values) or text
+        lines.append({"text": text, "points": round(amount * rate, 2)})
+    return lines
+
+
+def defense_lines(own_stats, opponent_stats, points_allowed):
+    """A defense's scoring stats as {"text", "points"}; the points-allowed bonus is always the last entry."""
+    counts = {
+        "sack": _number(str(opponent_stats.get("sacksYardsLost", "0")).split("-")[0]),
+        "interception": _number(opponent_stats.get("interceptions")),
+        "fumble_recovery": _number(opponent_stats.get("fumblesLost")),
+        "touchdown": _number(own_stats.get("defensiveTouchdowns")),
+    }
+    lines = [
+        {"text": _counted(amount, DEFENSE_LABELS[kind]), "points": round(amount * DEFENSE_POINTS[kind], 2)}
+        for kind, amount in counts.items()
+        if amount
+    ]
     bonus = next(
         (bonus for limit, bonus in POINTS_ALLOWED_TIERS if points_allowed <= limit),
         POINTS_ALLOWED_FLOOR,
     )
-    return round(earned + bonus, 2)
+    lines.append({"text": f"{points_allowed:g} pts allowed", "points": bonus})
+    return lines
+
+
+def defense_points(own_stats, opponent_stats, points_allowed):
+    return round(sum(line["points"] for line in defense_lines(own_stats, opponent_stats, points_allowed)), 2)
 
 
 def parse_over_under(summary):
@@ -181,10 +228,11 @@ def parse_over_under(summary):
 
 
 def parse_fantasy_points(summary):
-    """Return {"state", "detail", "points", "scores", "winner"} for one game.
+    """Return {"state", "detail", "points", "stats", "scores", "winner"} for one game.
 
-    Points and scores stay empty until kickoff. The winner stays None until the
-    game is final, and after a tie.
+    Points, stats and scores stay empty until kickoff. "stats" lists, per player
+    id, the {"text", "points"} entries that add up to that player's points. The
+    winner stays None until the game is final, and after a tie.
     """
     competition = summary["header"]["competitions"][0]
     status = competition["status"]["type"]
@@ -192,6 +240,7 @@ def parse_fantasy_points(summary):
         "state": status["state"],
         "detail": status.get("shortDetail") or status.get("description") or status["state"],
         "points": {},
+        "stats": {},
         "scores": {},
         "winner": None,
     }
@@ -199,16 +248,18 @@ def parse_fantasy_points(summary):
         return result
 
     points = result["points"]
+    stats = result["stats"]
     boxscore = summary.get("boxscore", {})
     for team in boxscore.get("players", []):
         for category in team.get("statistics", []):
             for line in category.get("athletes", []):
-                earned = sum(
-                    _number(value) * PLAYER_POINTS.get((category["name"], key), 0)
-                    for key, value in zip(category["keys"], line["stats"])
-                )
+                lines = stat_lines(category["name"], dict(zip(category["keys"], line["stats"])))
+                if not lines:
+                    continue
+                player_id = line["athlete"]["id"]
+                stats.setdefault(player_id, []).extend(lines)
+                earned = sum(entry["points"] for entry in lines)
                 if earned:
-                    player_id = line["athlete"]["id"]
                     points[player_id] = round(points.get(player_id, 0) + earned, 2)
 
     scores = {c["team"]["abbreviation"]: _number(c.get("score")) for c in competition["competitors"]}
@@ -218,9 +269,9 @@ def parse_fantasy_points(summary):
     }
     for abbr in scores:
         opponent = next(other for other in scores if other != abbr)
-        points[defense_id(abbr)] = defense_points(
-            team_stats.get(abbr, {}), team_stats.get(opponent, {}), scores[opponent]
-        )
+        lines = defense_lines(team_stats.get(abbr, {}), team_stats.get(opponent, {}), scores[opponent])
+        stats[defense_id(abbr)] = lines
+        points[defense_id(abbr)] = round(sum(entry["points"] for entry in lines), 2)
     result["scores"] = {abbr: int(score) for abbr, score in scores.items()}
     if status["state"] == "post":
         best = max(scores.values())

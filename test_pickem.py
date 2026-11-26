@@ -292,6 +292,39 @@ def test_fantasy_points_from_a_box_score():
     }
 
 
+def test_each_players_scoring_stats_are_listed_and_add_up_to_their_points(app, clock):
+    result = espn.parse_fantasy_points(SUMMARY)
+
+    assert result["stats"]["r1"] == [
+        {"text": "80 rush yds", "points": 8.0},
+        {"text": "1 rush TD", "points": 6.0},
+        {"text": "2 rec", "points": 2.0},
+        {"text": "15 rec yds", "points": 1.5},
+        {"text": "1 fum lost", "points": -2.0},
+    ]
+    assert result["stats"]["k1"] == [{"text": "FG 1/1", "points": 6.0}]
+    assert result["stats"]["DEF-DET"] == [
+        {"text": "3 sacks", "points": 3.0},
+        {"text": "1 INT", "points": 2.0},
+        {"text": "1 fum rec", "points": 2.0},
+        {"text": "1 def TD", "points": 6.0},
+        {"text": "10 pts allowed", "points": 4},
+    ]
+    assert {
+        player_id: round(sum(entry["points"] for entry in lines), 2) for player_id, lines in result["stats"].items()
+    } == result["points"]
+
+    jill = join(app, "Jill")
+    post(jill, "/picks", **ROSTER)
+    assert "rush yds" not in page(jill, "/")
+    clock["now"] = AFTER_KICKOFF
+
+    mine = page(jill, "/")
+    assert '80 rush yds <span class="pts">+8</span>' in mine
+    assert '1 fum lost <span class="pts">-2</span>' in mine
+    assert '10 pts allowed <span class="pts">+4</span>' in page(jill, "/teams")
+
+
 def test_no_points_before_a_game_kicks_off():
     pregame = {"header": {"competitions": [{"status": {"type": {"state": "pre"}}, "competitors": []}]}}
 
