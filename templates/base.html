@@ -55,6 +55,7 @@
 <main>
 {% for message in get_flashed_messages() %}<p class="flash">{{ message }}</p>{% endfor %}
 {% block content %}{% endblock %}
+<p class="muted">Version {{ version }} · started <time datetime="{{ started_at }}">{{ started_at }}</time></p>
 </main>
 <script>
   document.querySelectorAll("time[datetime]").forEach(function (el) {

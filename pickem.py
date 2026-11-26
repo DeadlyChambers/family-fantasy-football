@@ -18,6 +18,7 @@ import json
 import logging
 import secrets
 import sqlite3
+import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -79,6 +80,28 @@ CREATE TABLE IF NOT EXISTS roster_edits (
 USER_TABLES = ("picks", "tiebreakers", "game_picks", "roster_edits")
 
 log = logging.getLogger(__name__)
+
+
+UNVERSIONED = "unversioned"
+
+
+def app_version(root=ROOT):
+    """Version read from git as "1.<commits on HEAD> (<short hash>)", so every commit changes it.
+
+    "+changes" after the hash means tracked files differ from that commit.
+    """
+
+    def git(*args):
+        try:
+            done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+        except OSError:
+            return ""
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    count = git("rev-list", "--count", "HEAD")
+    # --exclude=* skips every tag, so the answer is always the bare hash
+    commit = git("describe", "--always", "--exclude=*", "--dirty=+changes")
+    return f"1.{count} ({commit})" if count and commit else UNVERSIONED
 
 
 def connect(db_path):
@@ -267,7 +290,7 @@ class LiveScores:
             self._failed.add(game_id)
 
 
-def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
+def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None, version=UNVERSIONED):
     app = Flask(__name__)
     app.secret_key = secret_key or secrets.token_hex(32)
     app.config.update(
@@ -276,6 +299,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         PERMANENT_SESSION_LIFETIME=timedelta(days=7),
     )
     now = now or (lambda: datetime.now(timezone.utc))
+    started_at = now()
     players = {player["id"]: player for player in pool["players"]}
     options = options_by_position(pool)
     lock_at = pool.get("lock_at")
@@ -351,6 +375,8 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             "user": g.get("user"),
             "reveal_at": reveal_at.isoformat(),
             "picks_lock_at": picks_lock_at.isoformat(),
+            "version": version,
+            "started_at": started_at.isoformat(),
         }
 
     @app.before_request
@@ -367,6 +393,27 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         if g.user is None and request.endpoint != "login":
             return redirect(url_for("login"))
         return None
+
+    @app.errorhandler(400)
+    def stale_form(_error):
+        message = "That page was out of date, so nothing was saved. Go back, reload the page and try again."
+        return render_template("problem.html", message=message), 400
+
+    @app.errorhandler(403)
+    def commish_needed(_error):
+        name = g.user["name"] if g.get("user") else "nobody"
+        message = (
+            f"Only the commish can do that, and this browser is logged in as {name}. "
+            "A browser holds one login at a time: log out, then log in as the commish."
+        )
+        return render_template("problem.html", message=message), 403
+
+    @app.after_request
+    def log_request(response):
+        if request.method == "POST" or response.status_code >= 400:
+            name = g.user["name"] if g.get("user") else "-"
+            log.info("%s %s %s as %s", request.method, request.path, response.status_code, name)
+        return response
 
     @app.teardown_request
     def close_db(_error):
@@ -743,12 +790,15 @@ def serve_command(args):
         raise SystemExit("No player pool yet. Run: python pickem.py init")
     if not SECRET_PATH.exists():
         SECRET_PATH.write_text(secrets.token_hex(32), encoding="utf-8")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    version = app_version()
     app = create_app(
         DB_PATH,
         json.loads(POOL_PATH.read_text(encoding="utf-8")),
         secret_key=SECRET_PATH.read_text(encoding="utf-8").strip(),
+        version=version,
     )
-    print(f"Pick'em running at http://{args.host}:{args.port}")
+    print(f"Pick'em version {version} running at http://{args.host}:{args.port}")
     serve(app, host=args.host, port=args.port, threads=8)
 
 

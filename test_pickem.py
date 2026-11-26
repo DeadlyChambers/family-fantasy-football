@@ -1,4 +1,6 @@
 import json
+import re
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -499,6 +501,49 @@ def test_a_change_to_a_reopened_team_after_the_lock_is_called_out(app, clock):
     assert "Edited by commish at <time" in board
     assert "reopened the team for one more change." in board
     assert "approved a change after reopening the team: added Other Thrower at QB, replacing Quinn Passer." in board
+
+
+def test_a_refused_save_says_why(app, clock):
+    jill = join(app, "Jill")
+    clock["now"] = AFTER_KICKOFF
+
+    not_commish = post(jill, "/commish/team/2", **ROSTER)
+    assert not_commish.status_code == 403
+    assert "this browser is logged in as Jill" in not_commish.get_data(as_text=True)
+
+    stale = join(app, "Shane").post("/commish/team/2", data={**ROSTER, "csrf": "from an older page"})
+    assert stale.status_code == 400
+    assert "out of date, so nothing was saved" in stale.get_data(as_text=True)
+
+
+def test_every_page_shows_the_version_it_was_started_with(tmp_path, clock):
+    application = pickem.create_app(
+        tmp_path / "pickem.db", POOL, now=lambda: clock["now"], secret_key="test", version="1.7 (abc1234)"
+    )
+
+    assert "Version 1.7 (abc1234)" in page(application.test_client(), "/login")
+
+
+def test_the_version_is_read_from_git_and_changes_with_each_commit(tmp_path):
+    def git(*args):
+        identity = ("-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false")
+        subprocess.run(["git", *identity, *args], cwd=tmp_path, check=True, capture_output=True)
+
+    assert pickem.app_version(tmp_path) == "unversioned"
+
+    git("init", "-q")
+    (tmp_path / "notes.txt").write_text("one", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-q", "-m", "one")
+    first = pickem.app_version(tmp_path)
+    assert re.fullmatch(r"1\.1 \([0-9a-f]{7,}\)", first)
+
+    (tmp_path / "notes.txt").write_text("two", encoding="utf-8")
+    assert pickem.app_version(tmp_path).endswith("+changes)")
+
+    git("commit", "-q", "-a", "-m", "two")
+    second = pickem.app_version(tmp_path)
+    assert second.startswith("1.2 (") and second != first
 
 
 def test_the_commish_deletes_a_team_only_when_the_name_matches_the_id(app, clock):

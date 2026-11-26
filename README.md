@@ -34,6 +34,8 @@ python -m venv .venv
 - **Reveal:** nobody sees another person's team until the day's first kickoff. After that the Everyone page is a leaderboard that refreshes about once a minute.
 - **Scoring:** full-point PPR from ESPN's box score; the tables are `PLAYER_POINTS`, `DEFENSE_POINTS` and `POINTS_ALLOWED_TIERS` in espn.py. Two-point conversions, safeties, blocked kicks and field-goal distance bonuses are not scored.
 - **Ranking:** each position's list is ordered best first by ESPN's projected points for the current week, shown after each name. `init` loads them; `pickem.py projections` refreshes them, then restart `serve`. The numbers use ESPN's standard full-PPR scoring (`FANTASY_SCORING` in espn.py), not a private league's own scoring.
+- **Version:** every page ends with "Version 1.(commits) (commit hash)" and the time the server started. `serve` reads it from git at startup, so each commit changes it; "+changes" after the hash means the running files differ from that commit. Commit, then restart `serve`, to deploy a new version.
+- **Refused saves:** a save from an out-of-date page, or a commish action from a browser logged in as someone else, shows a page that says so. `serve` prints one line per save and per refused request.
 - **Other days:** `pickem.py init --date YYYYMMDD` loads a different game day. Delete pickem.db first to start a new contest.
 
 ## Notes
