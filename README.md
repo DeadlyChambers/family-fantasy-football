@@ -24,8 +24,8 @@ python -m venv .venv
 .venv/Scripts/python -m pytest test_pickem.py
 ```
 
-- **Accounts:** `init` creates one per `[section]` in teams.ini. The first password is the person's name; the first login makes them choose their own name and password. Until then anyone who knows a name can claim that account.
-- **Locking:** submitting a team locks it. The commish (`--commish`, default Shane) can reopen a team, reset a password or add a person on the Commish page. No team can be entered after first kickoff without the commish.
+- **Accounts:** `init` creates one per `[section]` in teams.ini, and until first kickoff anyone can start a new team by logging in with a new name. The first password is the person's name; the first login makes them choose their own name and password. Until then anyone who knows a name can claim that account.
+- **Locking:** a team can be saved and changed as often as wanted until first kickoff, when every team locks. After that the commish (`--commish`, default Shane) can reopen a team for one more submit. The commish can also reset a password or add a person on the Commish page. No new team can be started after first kickoff without the commish.
 - **Reveal:** nobody sees another person's team until the day's first kickoff. After that the Everyone page is a leaderboard that refreshes about once a minute.
 - **Scoring:** full-point PPR from ESPN's box score; the tables are `PLAYER_POINTS`, `DEFENSE_POINTS` and `POINTS_ALLOWED_TIERS` in espn.py. Two-point conversions, safeties, blocked kicks and field-goal distance bonuses are not scored.
 - **Other days:** `pickem.py init --date YYYYMMDD` loads a different game day. Delete pickem.db first to start a new contest.

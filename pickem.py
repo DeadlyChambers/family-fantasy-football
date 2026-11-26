@@ -203,8 +203,8 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         row = g.db.execute("SELECT slots FROM picks WHERE user_id = ?", (user_id,)).fetchone()
         return json.loads(row["slots"]) if row else None
 
-    def can_edit(slots):
-        return bool(g.user["unlocked"]) or (slots is None and not revealed())
+    def can_edit():
+        return bool(g.user["unlocked"]) or not revealed()
 
     def commish_only(view):
         @functools.wraps(view)
@@ -251,6 +251,13 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
             name = request.form.get("name", "").strip()
             password = request.form.get("password", "")
             found = g.db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
+            if found is None and password.strip().lower() == name.lower() and 1 <= len(name) <= MAX_NAME_LENGTH:
+                if revealed():
+                    flash("New teams closed at kickoff. Ask the commish to add you.")
+                    return render_template("login.html")
+                add_user(g.db, name)
+                g.db.commit()
+                found = g.db.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchone()
             if found and found["must_change"]:
                 # The starter password is the name; phones capitalise and pad it.
                 password = password.strip().lower()
@@ -291,7 +298,7 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         rows, total = roster_view(slots, players, points) if slots else ([], 0)
         page = render_template(
             "home.html",
-            editable=can_edit(slots),
+            editable=can_edit(),
             chosen=chosen if chosen is not None else (slots or {}),
             slots=SLOTS,
             options=options,
@@ -307,9 +314,10 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
 
     @app.post("/picks")
     def submit_picks():
-        if not can_edit(load_slots(g.user["id"])):
+        if not can_edit():
             flash("Your team is locked. Ask the commish to reopen it.")
             return redirect(url_for("home"))
+        started = revealed()
         slots, error = validate_picks(request.form, players)
         if error:
             flash(error)
@@ -321,7 +329,10 @@ def create_app(db_path, pool, now=None, fetch=espn.fetch_json, secret_key=None):
         )
         g.db.execute("UPDATE users SET unlocked = 0 WHERE id = ?", (g.user["id"],))
         g.db.commit()
-        flash("Your team is submitted and locked.")
+        if started:
+            flash("Your team is submitted and locked.")
+        else:
+            flash("Your team is saved. You can change it until kickoff.")
         return redirect(url_for("home"))
 
     @app.route("/teams")

@@ -7,7 +7,7 @@
     {% for member in members %}
     <tr>
       <td>{{ member['name'] }}{% if member['must_change'] %} <span class="muted">(has not logged in)</span>{% endif %}</td>
-      <td>{% if member['unlocked'] %}Reopened{% elif member['submitted'] %}Locked{% else %}Not yet{% endif %}</td>
+      <td>{% if member['unlocked'] %}Reopened{% elif member['submitted'] %}Team in{% else %}Not yet{% endif %}</td>
       <td class="num">
         <form class="inline" method="post" action="{{ url_for('commish_unlock', user_id=member['id']) }}">
           <input type="hidden" name="csrf" value="{{ csrf_token() }}">

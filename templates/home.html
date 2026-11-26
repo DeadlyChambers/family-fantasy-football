@@ -4,9 +4,12 @@
 <h2>My team</h2>
 {% if editable %}
 <div class="card">
-  <p class="muted">Pick one player per spot from today's games. Submitting locks your team; only the commish can reopen it.
-    {% if not started %}Everyone's teams show at first kickoff, <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>.{% endif %}</p>
-  <form method="post" action="{{ url_for('submit_picks') }}" onsubmit="return confirm('Submit and lock your team?');">
+  {% if started %}
+  <p class="muted">The commish reopened your team. Pick one player per spot; submitting locks it again.</p>
+  {% else %}
+  <p class="muted">Pick one player per spot from today's games. {% if rows %}Your team is saved; you{% else %}You{% endif %} can change it until first kickoff, <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>. Then every team locks and everyone's teams show.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('submit_picks') }}"{% if started %} onsubmit="return confirm('Submit and lock your team?');"{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     {% for slot, position in slots %}
     <label for="{{ slot }}">{{ slot }}</label>
@@ -21,7 +24,7 @@
       {% endfor %}
     </select>
     {% endfor %}
-    <button class="primary">Submit and lock my team</button>
+    <button class="primary">{% if started %}Submit and lock my team{% else %}Save my team{% endif %}</button>
   </form>
 </div>
 {% elif rows %}
@@ -31,7 +34,7 @@
     {% if started %}<span class="total">{{ "%.2f"|format(total) }}</span>{% endif %}
   </div>
   {% include "_roster.html" %}
-  <p class="muted">{% if started %}Points update about once a minute. See <a href="{{ url_for('teams') }}">everyone's teams</a>.{% else %}Everyone's teams show at first kickoff, <time datetime="{{ reveal_at }}">{{ reveal_at }}</time>. Need a change? Ask the commish.{% endif %}</p>
+  <p class="muted">{% if started %}Points update about once a minute. See <a href="{{ url_for('teams') }}">everyone's teams</a>.{% endif %}</p>
 </div>
 {% else %}
 <div class="card">

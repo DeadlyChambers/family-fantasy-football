@@ -159,21 +159,41 @@ def test_starter_password_is_the_name_and_must_be_replaced(app):
     assert "My team" in post(fresh, "/login", name="Papaw", password="stuffing").get_data(as_text=True)
 
 
-def test_submitting_locks_the_team(app):
+def test_a_new_name_starts_a_team_until_kickoff(app, clock):
+    newcomer = app.test_client()
+    assert "do not match" in post(newcomer, "/login", name="Grandma", password="wrong").get_data(as_text=True)
+    landing = post(newcomer, "/login", name="Grandma", password="grandma ").get_data(as_text=True)
+    assert "Choose your name and password" in landing
+
+    clock["now"] = AFTER_KICKOFF
+    late = post(app.test_client(), "/login", name="Cousin", password="Cousin").get_data(as_text=True)
+    assert "New teams closed at kickoff" in late
+    board = page(join(app, "Jill"), "/teams")
+    assert "Grandma" in board and "Cousin" not in board
+
+
+def test_a_team_can_be_changed_until_kickoff_and_then_locks(app, clock):
     jill = join(app, "Jill")
     post(jill, "/picks", **ROSTER)
-    second = post(jill, "/picks", **{**ROSTER, "QB": "q2"}).get_data(as_text=True)
+    changed = post(jill, "/picks", **{**ROSTER, "QB": "q2"}).get_data(as_text=True)
 
-    assert "Your team is locked" in second
-    assert "Quinn Passer" in second
-    assert "Other Thrower" not in second
+    assert "Your team is saved" in changed
+    assert 'value="q2" selected' in changed
+
+    clock["now"] = AFTER_KICKOFF
+    late = post(jill, "/picks", **ROSTER).get_data(as_text=True)
+
+    assert "Your team is locked" in late
+    assert "Other Thrower" in late
+    assert "Quinn Passer" not in late
 
 
-def test_only_the_commish_can_reopen_a_team_and_it_locks_again(app):
+def test_only_the_commish_can_reopen_a_team_and_it_locks_again(app, clock):
     jill = join(app, "Jill")
     shane = join(app, "Shane")
     post(jill, "/picks", **ROSTER)
     jill_id = 2
+    clock["now"] = AFTER_KICKOFF
 
     assert post(jill, f"/commish/unlock/{jill_id}").status_code == 403
 
@@ -205,13 +225,15 @@ def test_other_teams_are_hidden_until_first_kickoff(app, clock):
         ({"K": "nobody"}, "Choose a player for K"),
     ],
 )
-def test_an_invalid_roster_is_refused_and_nothing_locks(app, change, complaint):
+def test_an_invalid_roster_is_refused_and_nothing_is_saved(app, change, complaint):
     jill = join(app, "Jill")
     refused = post(jill, "/picks", **{**ROSTER, **change})
 
     assert refused.status_code == 400
     assert complaint in refused.get_data(as_text=True)
-    assert "Submit and lock my team" in page(jill, "/")
+    mine = page(jill, "/")
+    assert "Save my team" in mine
+    assert "Your team is saved" not in mine
 
 
 def test_no_team_can_be_entered_after_kickoff_without_the_commish(app, clock):
