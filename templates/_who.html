@@ -1,0 +1,7 @@
+<div class="who">
+  {% if who['avatar_at'] %}<img class="avatar" src="{{ url_for('avatar', user_id=who['id'], v=who['avatar_at']) }}" alt="">{% else %}<span class="avatar">{{ who['name'][:1]|upper }}</span>{% endif %}
+  <div>
+    <{{ who_tag }}>{{ who_prefix }}{{ who['team_name'] or who['name'] }}</{{ who_tag }}>
+    {% if who['team_name'] %}<span class="muted">{{ who['name'] }}</span>{% endif %}
+  </div>
+</div>

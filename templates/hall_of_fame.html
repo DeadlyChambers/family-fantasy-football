@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Hall of fame</h2>
+{% if current %}
+{% if user['is_commish'] %}
+<div class="card">
+  <form method="post" action="{{ url_for('commish_hall_of_fame') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <p class="muted">{% if on_file %}{{ year }} is saved. Save again if a score was corrected since.{% else %}{{ year }} is final but not saved yet. Saving keeps it here for next year.{% endif %}</p>
+    <button class="primary">Save {{ year }} to the hall of fame</button>
+  </form>
+</div>
+{% endif %}
+{% else %}
+<p class="muted">{{ year }} is still being played. Its winner shows here when the last game is final.</p>
+{% endif %}
+{% for entry in years %}
+<div class="card">
+  <div class="team-head">
+    <h3>{{ entry['year'] }}</h3>
+    <span class="total">{{ entry['winner'] }}</span>
+  </div>
+  {% if entry['scores'] %}
+  <table>
+    {% for row in entry['scores'] %}
+    <tr><td>{{ loop.index }}. {{ row['name'] }}</td><td class="num">{{ "%.2f"|format(row['score']) }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No scores on file for this year.</p>
+  {% endif %}
+  {% if entry['pickem'] %}
+  {% set best = entry['pickem'][0]['right'] %}
+  <p class="muted">Game pick'em: {% for row in entry['pickem'] if row['right'] == best %}{{ row['name'] }}{% if not loop.last %}, {% endif %}{% endfor %} ({{ best }} right)</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

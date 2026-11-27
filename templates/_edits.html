@@ -1,0 +1,3 @@
+{% for edit in edits %}
+<p class="muted">Edited by commish at <time datetime="{{ edit['edited_at'] }}">{{ edit['edited_at'] }}</time>: {{ edit['note'] }}.</p>
+{% endfor %}

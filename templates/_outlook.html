@@ -1,0 +1,1 @@
+{% if outlook['minutes'] %}<p class="muted">Projected <strong>{{ "%.2f"|format(outlook['projected']) }}</strong> · {{ outlook['playing'] }} {{ 'player' if outlook['playing'] == 1 else 'players' }} with {{ outlook['minutes'] }} min left</p>{% endif %}

@@ -27,10 +27,28 @@
   td, th { padding: 7px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.slot { width: 3.2em; color: #6b5a40; font-size: 14px; }
-  .team-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  input[type=checkbox] { width: auto; }
+  label.check { font-weight: 400; }
+  button:disabled { opacity: .5; }
+  .team-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .team-head h3 { margin: 0; font-size: 19px; }
+  .who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .who .muted { display: block; font-size: 14px; }
+  .avatar { flex: none; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--field); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+  .tabs { display: flex; gap: 8px; margin: 0 0 14px; }
+  .tabs a { padding: 6px 16px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--ink); text-decoration: none; font-size: 15px; }
+  .tabs a.on { background: var(--field); border-color: var(--field); color: #fff; font-weight: 700; }
+  .compact { font-size: 15px; }
+  .compact td { vertical-align: middle; }
+  .compact td.rank { width: 1.6em; color: #6b5a40; }
+  .compact .avatar { width: 30px; height: 30px; font-size: 14px; }
   .total { font-size: 22px; font-weight: 800; color: var(--field); font-variant-numeric: tabular-nums; }
   .muted { color: #6b5a40; font-size: 15px; }
+  .stats { color: #6b5a40; font-size: 13px; margin-top: 2px; }
+  .stats .pts { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .gain, .loss { font-size: 13px; font-weight: 700; }
+  .gain { color: var(--field); }
+  .loss { color: #a3261d; }
   .games { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; }
   .games li { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 14px; }
   .inline { display: inline; }
@@ -43,8 +61,9 @@
   <nav>
     <a href="{{ url_for('home') }}">My team</a>
     <a href="{{ url_for('teams') }}">Everyone</a>
+    <a href="{{ url_for('hall_of_fame') }}">Hall of fame</a>
     {% if user['is_commish'] %}<a href="{{ url_for('commish') }}">Commish</a>{% endif %}
-    <a href="{{ url_for('account') }}">{{ user['name'] }}</a>
+    <span>{{ user['name'] }}</span>
     <form method="post" action="{{ url_for('logout') }}">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button>Log out</button>
@@ -55,6 +74,7 @@
 <main>
 {% for message in get_flashed_messages() %}<p class="flash">{{ message }}</p>{% endfor %}
 {% block content %}{% endblock %}
+<p class="muted">Version {{ version }} · started <time datetime="{{ started_at }}">{{ started_at }}</time></p>
 </main>
 <script>
   document.querySelectorAll("time[datetime]").forEach(function (el) {

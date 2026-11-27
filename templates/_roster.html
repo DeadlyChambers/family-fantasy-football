@@ -2,8 +2,8 @@
   {% for row in rows %}
   <tr>
     <td class="slot">{{ row['slot'] }}</td>
-    <td>{% if row['player'] %}{{ row['player']['name'] }} <span class="muted">{{ row['player']['team'] }}</span>{% else %}<span class="muted">Player no longer listed</span>{% endif %}</td>
-    {% if started %}<td class="num">{{ "%.2f"|format(row['points']) }}</td>{% endif %}
+    <td>{% if row['player'] %}{{ row['player']['name'] }} <span class="muted">{{ row['player']['team'] }}</span>{% else %}<span class="muted">{% if row['hidden'] %}Hidden until that game kicks off{% elif row['picked'] %}Player no longer listed{% else %}Not picked{% endif %}</span>{% endif %}{% if started and row['player'] and row['stats'] %}<div class="stats">{% for entry in row['stats'] %}{{ entry['text'] }} <span class="pts">{{ "%+g"|format(entry['points']) }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}</td>
+    {% if started %}<td class="num">{% if row['change'] %}<span class="{{ 'gain' if row['change'] > 0 else 'loss' }}">{{ "%+.2f"|format(row['change']) }}</span> {% endif %}{{ "%.2f"|format(row['points']) }}{% if row['player'] and row['minutes'] %}<div class="stats">proj {{ "%.1f"|format(row['projected']) }}</div>{% endif %}</td>{% endif %}
   </tr>
   {% endfor %}
 </table>
